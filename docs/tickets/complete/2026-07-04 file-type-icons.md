@@ -184,3 +184,35 @@ Tune palette hex values in `FileIconPalette` only — no other churn. If any ico
 - [ ] Reopen a second, different solution — all icons re-render correctly on the new nodes; no stale bindings from prior solution.
 - [ ] Row height comparable to pre-change; no jarring taller rows.
 - [ ] No exceptions in the Output pane while browsing the tree.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decision #1 (palette values)**: tuned live with user during visual pass. Final values in `Models/FileIconPalette.cs` — not the ticket's starter values. Notably: user asked for a uniform blue (`#569CD6`) across all four `ProjectKind` slots so every csproj-level row reads the same at a glance; per-kind distinction is carried by the glyph, not the color.
+- **Open Decision #2 (icon size)**: kept default 16px. Row height unchanged from baseline.
+- **Open Decision #3 (unknown fallback)**: `file-outline` in gray, per ticket default.
+- **Open Decision #4 (cache glyph/color)**: kept on-demand getters on `TreeNode` (`IconGlyph` / `IconColor` computed via `FileIconMap.From(this)`). No perf issue observed at the tree sizes MiniIde targets.
+- **Open Decision #5 (csproj glyph)**: `microsoft-visual-studio` per default. User then requested a distinct magenta `#B026AD` so `.csproj` no longer visually shares the C# purple family; C# files ended up green (`#29A03F`).
+- **Library glyph change**: `library` MDI glyph draws Greek building columns (real library building) which read wrong for "code library". Switched `ProjectLib` to `file-link` per user request.
+
+### Problems encountered
+- **TTF internal family name mismatch with ticket**: ticket said the font's internal family name is `Material Design Icons`. Actual name in the pinned 6.8.96 Desktop TTF is `Material Design Icons Desktop`. Verified via `System.Windows.Media.Fonts.GetFontFamilies(uri)` (WPF). `App.axaml` `FontFamily` URI updated to match. If the wrong suffix ships, Avalonia silently falls back to the system font and glyphs render as tofu — non-obvious failure mode.
+- **No `meta.json` in `Templarian/MaterialDesign-Font` repo** (that lives in the sibling `MaterialDesign-Webfont` repo). The Desktop-Font repo does ship `cheatsheet.html`, which embeds all `name` / `hex` / `version` triples inline in a JS data blob — grep with a regex like `name:"<name>"[^}]*?hex:"([0-9A-F]+)"` to extract codepoints and `version:"X.Y.Z"` for the pinned release (max value = 6.8.96 as of pin).
+- **App holds `MiniIde.exe` between rebuilds**: repeated `scripts/run.ps1` while the app is still open fails with MSB3021 (file in use). Use `scripts/stop.ps1` before re-running when iterating on visuals.
+
+### Interesting tidbits
+- **License**: Pictogrammers Free License. Fonts distributed under Apache 2.0 (icon set is a mix — some redistributed under their own licenses, rest Apache 2.0). Copy the repo's `LICENSE` verbatim rather than shipping a bare `Apache-2.0` file.
+- `\U000FXXXX` (uppercase `\U`, 8 hex digits) is the only way to encode MDI codepoints in C# — the compiler expands it to a surrogate pair automatically; runtime string length is 2 chars per glyph, which Avalonia's `TextBlock.Text` handles transparently.
+- MDI version pinned: **6.8.96**. Documented in `Assets/icons/README.md` and comment atop `Models/FileIcon.cs`.
+- Extension whitelist in `SolutionService.BuildFolder` promoted from an `is or or or` expression to a `HashSet<string>` field (`IncludedExtensions`, `OrdinalIgnoreCase`). The list crossed the readability threshold once audio/image/video categories were folded in.
+
+### Related areas affected
+- `TreeNode` gained two computed properties (`IconGlyph`, `IconColor`) and a nullable `ProjectKind`. Compiled-binding template in `MainWindow.axaml` reads them directly — no converter, no attached property; the ticket flagged this constraint and it held.
+- `SolutionService.LoadAsync` now sets `ProjectKind` on project tree nodes (previously only carried on `ProjectEntry`).
+
+### Rejected alternatives
+- **`library` glyph for `ProjectLib`** (ticket default). Rejected during visual pass — glyph reads as a public-library building, not a code library. `file-link` chosen.
+- **Per-kind project palette** (ticket starter values had exe blue / lib gray / web teal / tst green). Rejected during visual pass — user preferred uniform csproj color to reduce visual noise at the project-list level.
+- **`palette` glyph for `.ico`** (tried as an "icon painter" nod). Rejected — `palette` reads more like "a palette file format" than "an icon file". `.ico` stayed grouped with other raster image extensions.
+- **`language-markdown` glyph for `.md`** (tried per user request). Rejected during visual pass — glyph too fiddly at 16px to read clearly against the tree background. `.md` stayed on `file-document`.
+

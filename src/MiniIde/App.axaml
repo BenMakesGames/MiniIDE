@@ -5,6 +5,10 @@
              RequestedThemeVariant="Dark">
              <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
 
+    <Application.Resources>
+        <FontFamily x:Key="IconFont">avares://MiniIde/Assets/icons/MaterialDesignIconsDesktop.ttf#Material Design Icons Desktop</FontFamily>
+    </Application.Resources>
+
     <Application.DataTemplates>
         <local:ViewLocator/>
     </Application.DataTemplates>

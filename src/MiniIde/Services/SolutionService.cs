@@ -34,7 +34,8 @@ public class SolutionService
             {
                 Name = name,
                 Kind = NodeKind.Project,
-                Path = abs
+                Path = abs,
+                ProjectKind = kind
             };
             PopulateProjectFiles(projNode);
             projectNodes.Add(projNode);
@@ -52,6 +53,16 @@ public class SolutionService
         projectNode.IsLoaded = true;
     }
 
+    private static readonly HashSet<string> IncludedExtensions = new(System.StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".csproj", ".json",
+        ".xml", ".axaml", ".xaml", ".config", ".props", ".targets",
+        ".md", ".txt", ".editorconfig",
+        ".wav", ".mp3", ".ogg", ".flac",
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico",
+        ".mp4", ".mov", ".avi", ".webm", ".mkv",
+    };
+
     private static TreeNode BuildFolder(string root, string dir)
     {
         var node = new TreeNode { Name = Path.GetFileName(dir), Kind = NodeKind.Folder, Path = dir };
@@ -64,7 +75,7 @@ public class SolutionService
         foreach (var f in Directory.EnumerateFiles(dir))
         {
             var ext = Path.GetExtension(f).ToLowerInvariant();
-            if (ext is ".cs" or ".csproj" or ".json" or ".xml" or ".axaml" or ".xaml" or ".md" or ".txt" or ".editorconfig")
+            if (IncludedExtensions.Contains(ext))
                 node.Children.Add(new TreeNode { Name = Path.GetFileName(f), Kind = NodeKind.File, Path = f });
         }
         return node;

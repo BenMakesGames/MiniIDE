@@ -135,3 +135,25 @@ Confirm the status bar reports the copied string. Paste into a plain text editor
 - [ ] Open a second solution located elsewhere on disk. Confirm relative paths recompute against the new solution root (regression check for stale anchor).
 - [ ] Attempt each action on a file whose absolute path lies outside the solution root (drag one in via a symlink or open a file via the file picker if that ever wires up). Relative-path copy yields a `..\...` path without throwing. (Skip if no such path is reachable in current build.)
 - [ ] No exceptions appear in the Output pane throughout.
+
+## Learnings
+
+### Architectural decisions
+- **Inline handlers, one shared resolver + shared clipboard helper.** Followed Open Decision #1 default. Three handlers stayed short; `GetTargetPath(object?)` collapses both `TreeNode` and `EditorTabViewModel` cases; `CopyToClipboardAsync(string)` centralizes status/exception plumbing. No helper class extracted — YAGNI.
+- **`OnCtxOpenInExplorerClick` is sync (not `async void`).** Ticket flagged this as optional. No `await` inside, so dropped the `async` — no compiler warning, no captured state machine.
+- **Status bar reports copy success and failure** per Open Decision #4. `Vm.Status = $"Copied {text}"` on success; `$"Copy failed: {ex.Message}"` on exception; `"clipboard unavailable"` if `TopLevel.GetTopLevel(this)?.Clipboard` returns null. Ticket AC required no unhandled exception; the null branch also handles the design-time / detached-window edge case.
+- **Explorer `/select,` and target passed as two separate `ArgumentList` entries.** Windows Explorer accepts both `/select,<path>` (glued) and `/select, <path>` (space between). Splitting is safer against paths containing spaces / commas because `ArgumentList` escapes each entry.
+
+### Problems encountered
+- **`IClipboard.SetTextAsync` is an extension method, not an instance member.** Ticket's example (`Clipboard!.SetTextAsync(...)`) compiles only with `using Avalonia.Input.Platform;` because `SetTextAsync` lives in `Avalonia.Input.Platform.ClipboardExtensions`. Initial build failed with CS1061 — added the using directive and it built clean.
+
+### Interesting tidbits
+- The Avalonia `ContextMenu` embedded inside a `DataTemplate` inherits the templated item's `DataContext`, so each `MenuItem`'s `DataContext` is that item verbatim. No `PlacementTarget` gymnastics required — `((MenuItem)sender).DataContext` is the `TreeNode` / `EditorTabViewModel`.
+
+### Rejected alternatives
+- **Shared `ContextMenu` as a `StaticResource`.** Cleaner in principle, but three menu items × two attach points is barely any duplication, and shared-menu instances make per-instance `DataContext` reasoning fussier. Kept two literal inline blocks.
+- **Icons on menu items.** Open Decision #2 default — text-only matches the existing top `Menu` items. Would only make sense if we later restyle the whole app's menus.
+
+### Related areas affected
+- Future context-menu additions (rename, delete, reveal in terminal) can reuse the same `StackPanel.ContextMenu` shape. If more actions accumulate the shared-resource path may become worth revisiting.
+- Any future non-Windows target must replace the `explorer.exe` launch (`open` on macOS, `xdg-open` on Linux). Currently gated by `RuntimeIdentifier` `win-x64`.

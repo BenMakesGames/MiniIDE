@@ -67,6 +67,13 @@
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate DataType="m:TreeNode" ItemsSource="{Binding Children}">
                             <StackPanel Orientation="Horizontal">
+                                <StackPanel.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick"/>
+                                        <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
+                                        <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
+                                    </ContextMenu>
+                                </StackPanel.ContextMenu>
                                 <TextBlock Text="{Binding IconGlyph}"
                                            FontFamily="{StaticResource IconFont}"
                                            FontSize="16"
@@ -84,6 +91,13 @@
                     <TabControl.ItemTemplate>
                         <DataTemplate DataType="vm:EditorTabViewModel">
                             <StackPanel Orientation="Horizontal">
+                                <StackPanel.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick"/>
+                                        <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
+                                        <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
+                                    </ContextMenu>
+                                </StackPanel.ContextMenu>
                                 <TextBlock Text="{Binding Header}"/>
                                 <Button Content="✕" Margin="6,0,0,0" Padding="4,0" FontSize="12" MinHeight="0" MinWidth="0" Click="OnCloseTabClick" Tag="{Binding}"/>
                             </StackPanel>

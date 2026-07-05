@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
@@ -85,6 +87,59 @@ public partial class MainWindow : Window
     {
         if (sender is Button b && b.Tag is EditorTabViewModel tab)
             await tab.CloseCommand.ExecuteAsync(null);
+    }
+
+    private static string? GetTargetPath(object? dataContext) => dataContext switch
+    {
+        TreeNode { Path: not null } tn => tn.Path,
+        EditorTabViewModel tab => tab.FilePath,
+        _ => null
+    };
+
+    private void OnCtxOpenInExplorerClick(object? sender, RoutedEventArgs e)
+    {
+        var ctx = (sender as MenuItem)?.DataContext;
+        var target = GetTargetPath(ctx);
+        if (target is null) return;
+        var isFolder = ctx is TreeNode { Kind: NodeKind.Folder };
+        try
+        {
+            var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = true };
+            if (isFolder) psi.ArgumentList.Add(target);
+            else { psi.ArgumentList.Add("/select,"); psi.ArgumentList.Add(target); }
+            Process.Start(psi);
+        }
+        catch (Exception ex) { Vm.Status = $"Open in Explorer failed: {ex.Message}"; }
+    }
+
+    private async void OnCtxCopyAbsolutePathClick(object? sender, RoutedEventArgs e)
+    {
+        var target = GetTargetPath((sender as MenuItem)?.DataContext);
+        if (target is null) return;
+        await CopyToClipboardAsync(target);
+    }
+
+    private async void OnCtxCopyRelativePathClick(object? sender, RoutedEventArgs e)
+    {
+        var target = GetTargetPath((sender as MenuItem)?.DataContext);
+        if (target is null) return;
+        var slnPath = Vm.Solution.SolutionPath;
+        var text = slnPath is null
+            ? target
+            : Path.GetRelativePath(Path.GetDirectoryName(slnPath)!, target);
+        await CopyToClipboardAsync(text);
+    }
+
+    private async Task CopyToClipboardAsync(string text)
+    {
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is null) { Vm.Status = "Copy failed: clipboard unavailable"; return; }
+            await clipboard.SetTextAsync(text);
+            Vm.Status = $"Copied {text}";
+        }
+        catch (Exception ex) { Vm.Status = $"Copy failed: {ex.Message}"; }
     }
 
     private async void OnTreeDoubleTapped(object? sender, TappedEventArgs e)

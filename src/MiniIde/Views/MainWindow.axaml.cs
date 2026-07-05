@@ -111,6 +111,40 @@ public partial class MainWindow : Window
         if (sender is TextEditor editor) BindEditor(editor);
     }
 
+    private void OnOutputEditorAttached(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (sender is TextEditor editor) BindOutputEditor(editor);
+    }
+
+    private void OnOutputEditorDataContextChanged(object? sender, EventArgs e)
+    {
+        if (sender is TextEditor editor) BindOutputEditor(editor);
+    }
+
+    private readonly HashSet<TextEditor> _outputBound = new();
+
+    private void BindOutputEditor(TextEditor editor)
+    {
+        if (DataContext is not MainWindowViewModel vm) return;
+        if (!_outputBound.Add(editor)) return;
+
+        var doc = vm.Output.Document;
+        editor.Document = doc;
+
+        const double epsilon = 1.0;
+        bool wasAtBottom = true;
+
+        doc.Changing += (_, _) =>
+        {
+            var scroll = (Avalonia.Controls.Primitives.ILogicalScrollable)editor.TextArea.TextView;
+            wasAtBottom = scroll.Offset.Y >= scroll.Extent.Height - scroll.Viewport.Height - epsilon;
+        };
+        doc.Changed += (_, _) =>
+        {
+            if (wasAtBottom) editor.ScrollToLine(editor.Document.LineCount);
+        };
+    }
+
     private readonly System.Collections.Generic.Dictionary<TextEditor, EditorBinding> _bindings = new();
 
     private void BindEditor(TextEditor editor)

@@ -129,7 +129,16 @@
                     </TabItem>
 
                     <TabItem Header="Output">
-                        <ListBox Background="#000000" ItemsSource="{Binding Output.Lines}" FontFamily="Consolas,monospace"/>
+                        <ae:TextEditor Name="OutputEditor"
+                                       IsReadOnly="True"
+                                       ShowLineNumbers="False"
+                                       WordWrap="False"
+                                       FontFamily="Consolas,monospace"
+                                       FontSize="13"
+                                       Background="#000000"
+                                       Foreground="#DCDCDC"
+                                       AttachedToVisualTree="OnOutputEditorAttached"
+                                       DataContextChanged="OnOutputEditorDataContextChanged"/>
                     </TabItem>
 
                     <TabItem Header="NuGet">

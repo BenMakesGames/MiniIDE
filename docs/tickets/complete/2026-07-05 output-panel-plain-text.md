@@ -75,3 +75,27 @@ Grep for `Output.Lines` — must return zero hits after step 1. Grep for `Output
 - [ ] Force >5000 lines of output (a chatty test run, or temporarily lower the cap to 50 for the test). Confirm the top lines drop and total line count holds at the cap.
 - [ ] Output tab is read-only: clicking in it and typing does nothing; no caret-insert behavior.
 - [ ] Editor tabs (C# / XML / JSON) still colorize and behave normally — regression check that shared `TextEditor` styling wasn't perturbed.
+
+## Learnings
+
+### Architectural decisions
+- Open Decision #1 (trim granularity): went with per-append trim in a `while` loop (`while (Document.LineCount > 5000)`) rather than an `if`. `while` is defensive against future callers that might insert multi-line chunks in one call — a single `if` would leak lines above the cap in that case.
+- Open Decision #2 (epsilon): 1.0 pixel. Matches ticket default.
+- Open Decision #3 (Document exposure): exposed `TextDocument Document { get; }` as a `get;`-only auto-prop, mirroring `EditorTabViewModel.Document`. VM remains UI-framework-agnostic aside from the `AvaloniaEdit.Document` reference (already a project-wide dep).
+- Tail-follow via `TextDocument.Changing` + `Changed` events rather than a VM event: keeps the tail-follow logic in the view where it belongs (viewport is a view concern) and leaves the VM ignorant of scroll state.
+- Kept a `HashSet<TextEditor> _outputBound` for idempotent binding on both `AttachedToVisualTree` and `DataContextChanged`, matching the guard pattern used by `BindEditor` for code-tab editors.
+
+### Problems encountered
+- **`TextView.ExtentHeight` / `Viewport` don't exist as direct properties.** First compile failed with `CS1061`. `AvaloniaEdit.Rendering.TextView` exposes those values through `Avalonia.Controls.Primitives.ILogicalScrollable`. Cast to that interface, then read `Offset.Y`, `Extent.Height`, `Viewport.Height`. Documented below.
+
+### Interesting tidbits
+- `TextDocument` raises `Changing` **before** the mutation applies — perfect for pre-insert viewport capture. `Changed` fires after. Both are needed for correct tail-follow: capturing after would always report "not at bottom" if the insert grew the extent.
+- `Document.Insert(Document.TextLength, "...")` preserves caret and selection; `Document.Text = "..."` blows both away. Only use the latter for `Clear()`.
+
+### Related areas affected
+- `MainWindow.axaml.cs` — added `OnOutputEditorAttached`, `OnOutputEditorDataContextChanged`, `BindOutputEditor`. Sibling to the existing `BindEditor` helper for code-tab editors. Deliberately kept separate rather than folded into one polymorphic `Bind` — the concerns (colorizer, caret sync, tab switching vs. tail-follow, single-instance) don't overlap.
+
+### Rejected alternatives
+- Raising a custom event on `OutputViewModel` for tail-follow ("append happened"): rejected. `TextDocument.Changing`/`Changed` already gives us pre/post hooks with no VM plumbing.
+- Batched line-cap trim: rejected per ticket default. Per-append matches existing 1-in-1-out semantics; simpler and no perceptible cost at these line rates.
+- Binding `Document` via XAML: called out in ticket & `docs/avaloniaedit.md`; silent no-op.

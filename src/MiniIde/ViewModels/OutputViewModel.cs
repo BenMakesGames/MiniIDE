@@ -1,15 +1,21 @@
-using System.Collections.ObjectModel;
 using Avalonia.Threading;
+using AvaloniaEdit.Document;
 
 namespace MiniIde.ViewModels;
 
 public class OutputViewModel : ViewModelBase
 {
-    public ObservableCollection<string> Lines { get; } = new();
-    public void Clear() => Dispatcher.UIThread.Post(Lines.Clear);
+    public TextDocument Document { get; } = new();
+
+    public void Clear() => Dispatcher.UIThread.Post(() => Document.Text = "");
+
     public void Append(string line) => Dispatcher.UIThread.Post(() =>
     {
-        Lines.Add(line);
-        if (Lines.Count > 5000) Lines.RemoveAt(0);
+        Document.Insert(Document.TextLength, line + "\n");
+        while (Document.LineCount > 5000)
+        {
+            var first = Document.GetLineByNumber(1);
+            Document.Remove(first.Offset, first.TotalLength);
+        }
     });
 }

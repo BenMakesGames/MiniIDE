@@ -152,6 +152,13 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnSolutionNameDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        var path = Vm.Solution.SolutionPath;
+        if (path is null) return;
+        await Vm.OpenFileAsync(path);
+    }
+
     private async void OnTreeKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;

@@ -64,3 +64,17 @@ Same `TextBlock`: add `DoubleTapped="OnSolutionNameDoubleTapped"`. Mirrors the n
 - [ ] Repeat with a `.sln` file (if available) — tab opens as plain text; no exception.
 - [ ] Regression: tree-view double-click on a project node still expands; on a file node still opens the file (`OnTreeDoubleTapped` untouched).
 - [ ] Regression: Play / Stop buttons in the top-right still work; the added handler does not interfere with sibling controls.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decision 1 (cursor)**: kept default — no `Cursor="Hand"`. Label stays visually flat; can revisit if manual testing feels ambiguous.
+- **Open Decision 2 (`DoubleTapped` vs `Tapped` w/ click count)**: kept default `DoubleTapped`. Matches `OnTreeDoubleTapped` naming/shape in same file.
+- Handler is `async void` (event handler idiom) mirroring `OnTreeDoubleTapped` — same convention throughout `MainWindow.axaml.cs`.
+
+### Interesting tidbits
+- `MainWindowViewModel.OpenFileAsync` de-dup is a straight `foreach` over `Tabs` using `Equals(path, OrdinalIgnoreCase)` — not a dict lookup. Fine at IDE tab counts; worth remembering if the tab collection ever balloons.
+- `EditorTabViewModel` derives its header from the file path via existing logic — no header work needed in the handler.
+
+### Constraints re-confirmed
+- Avalonia `TextBlock` needs `Background="Transparent"` to be fully hit-testable across whitespace inside its bounds. Without it, `DoubleTapped` fires only over glyph ink.

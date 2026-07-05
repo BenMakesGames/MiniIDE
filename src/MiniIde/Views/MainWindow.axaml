@@ -28,7 +28,7 @@
 
         <Border Grid.Row="1" Background="#1E1E22" BorderThickness="0,0,0,1" BorderBrush="#40808080">
             <Grid Margin="8,4" ColumnDefinitions="Auto,*,Auto">
-                <TextBlock Grid.Column="0" Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18"/>
+                <TextBlock Grid.Column="0" Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18" Background="Transparent" DoubleTapped="OnSolutionNameDoubleTapped"/>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <ComboBox Width="280"
                               ItemsSource="{Binding Projects}"

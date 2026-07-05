@@ -66,3 +66,18 @@ In `Views/MainWindow.axaml`, add a `TextBlock.ContextMenu` to the row 1 solution
 - [ ] Regression: right-click a project node and a file node in the tree — the same three actions still behave as before (project reveals its `.csproj`; file reveals the file).
 - [ ] Regression: double-clicking the solution name still opens the solution file in an editor tab (`OnSolutionNameDoubleTapped` untouched).
 - [ ] No exceptions appear in the Output pane throughout.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decision 1 (inline copy vs. shared resource)** — kept the third inline `<ContextMenu>` copy on the solution-name `TextBlock`, matching the tree + tab templates. Duplication is real but consistent; per-instance `DataContext` reasoning stays trivial. No StaticResource hoist.
+- **Open Decision 2 (`GetTargetPath` arm vs. dedicated handlers)** — added a single `MainWindowViewModel vm => vm.Solution.SolutionPath` arm to the shared resolver. All three `OnCtx*` handlers were reused verbatim; zero new handler methods.
+
+### Implementation notes
+- The load-bearing change is the `GetTargetPath` VM arm, exactly as the ticket warned. Because the solution-name `TextBlock` inherits the window `DataContext`, every `MenuItem.DataContext` in its embedded menu resolves to `MainWindowViewModel` — without the arm, all three actions fall through to `null` and bail silently.
+- The reveal-and-select branch in `OnCtxOpenInExplorerClick` needed no change: `isFolder` keys off `ctx is TreeNode { Kind: Folder }`, and the VM `ctx` is not a `TreeNode`, so it naturally takes the `/select,` file branch.
+- Relative-path math resolves to the bare filename (`MiniIde.slnx`) since `Path.GetDirectoryName(SolutionPath)` is the solution's own directory — no special-casing.
+
+### Verification
+- `dotnet build` clean (0 errors; 3 pre-existing warnings unrelated to this change).
+- Acceptance criteria confirmed by code inspection. The manual right-click GUI Test Plan items (menu appears, Explorer reveal, clipboard contents, no-solution safety, regressions) require driving the running app and were left for manual verification.

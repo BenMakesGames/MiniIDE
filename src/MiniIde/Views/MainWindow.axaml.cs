@@ -100,6 +100,7 @@ public partial class MainWindow : Window
     {
         TreeNode { Path: not null } tn => tn.Path,
         TabViewModelBase tab => tab.FilePath,
+        MainWindowViewModel vm => vm.Solution.SolutionPath,
         _ => null
     };
 

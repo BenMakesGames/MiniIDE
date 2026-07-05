@@ -25,6 +25,13 @@ namespace MiniIde.Views;
 
 public partial class MainWindow : Window
 {
+    static MainWindow()
+    {
+        Control.RequestBringIntoViewEvent.AddClassHandler<TreeViewItem>(
+            (_, e) => e.TargetRect = e.TargetRect.WithWidth(0),
+            RoutingStrategies.Bubble);
+    }
+
     private MainWindowViewModel Vm => (MainWindowViewModel)DataContext!;
 
     public IRelayCommand OpenSolutionDialogCommand { get; }

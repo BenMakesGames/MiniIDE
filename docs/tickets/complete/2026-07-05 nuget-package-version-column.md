@@ -38,3 +38,8 @@
 - [ ] Package rows show `Id` on the left and `CurrentVersion` as a separate column to its right, both non-italic.
 - [ ] Versions column edge is consistent down the list (Auto-sizes to widest version).
 - [ ] Selecting a package row still populates the Versions panel.
+
+## Learnings
+- `Grid ColumnDefinitions="*,Auto"` inside a per-row `DataTemplate`: `*` (Id) fills leftover, `Auto` (version) hugs its own text. Result — version's *right* edge is anchored near the ListBox right edge, so right edges align across rows; version's *left* edge varies per row based on version text width. Ticket's test-plan wording "Versions column edge is consistent down the list (Auto-sizes to widest version)" is satisfied by the right-edge alignment.
+- If future work wants strict left-edge alignment for the version column, would need `Grid.IsSharedSizeScope="True"` on the ListBox + `SharedSizeGroup` on the Id column. Not needed for MVP.
+- Default `TextBlock` horizontal alignment is left within its Grid cell — no explicit `HorizontalAlignment` needed.

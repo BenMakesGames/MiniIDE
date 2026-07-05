@@ -52,16 +52,6 @@ public class SolutionService
         projectNode.IsLoaded = true;
     }
 
-    private static readonly HashSet<string> IncludedExtensions = new(System.StringComparer.OrdinalIgnoreCase)
-    {
-        ".cs", ".csproj", ".json",
-        ".xml", ".axaml", ".xaml", ".config", ".props", ".targets",
-        ".md", ".txt", ".editorconfig",
-        ".wav", ".mp3", ".ogg", ".flac",
-        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico",
-        ".mp4", ".mov", ".avi", ".webm", ".mkv",
-    };
-
     private static TreeNode BuildFolder(string root, string dir)
     {
         var node = new TreeNode { Name = Path.GetFileName(dir), Kind = NodeKind.Folder, Path = dir };
@@ -72,11 +62,7 @@ public class SolutionService
             node.Children.Add(BuildFolder(root, sub));
         }
         foreach (var f in Directory.EnumerateFiles(dir))
-        {
-            var ext = Path.GetExtension(f).ToLowerInvariant();
-            if (IncludedExtensions.Contains(ext))
-                node.Children.Add(new TreeNode { Name = Path.GetFileName(f), Kind = NodeKind.File, Path = f });
-        }
+            node.Children.Add(new TreeNode { Name = Path.GetFileName(f), Kind = NodeKind.File, Path = f });
         return node;
     }
 }

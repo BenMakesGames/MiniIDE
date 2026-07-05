@@ -183,9 +183,10 @@
                             <ListBox Grid.Row="1" Grid.Column="2" Background="#000000" ItemsSource="{Binding Packages}" SelectedItem="{Binding SelectedPackage}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="m:PackageEntry">
-                                        <TextBlock>
-                                            <Run Text="{Binding Id}"/><Run Text=" "/><Run Text="{Binding CurrentVersion}" FontStyle="Italic"/>
-                                        </TextBlock>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Grid.Column="0" Text="{Binding Id}"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding CurrentVersion}" Margin="8,0,0,0"/>
+                                        </Grid>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>

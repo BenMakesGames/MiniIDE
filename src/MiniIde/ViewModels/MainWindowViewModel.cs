@@ -25,10 +25,10 @@ public partial class MainWindowViewModel : ViewModelBase
     public NuGetViewModel NuGetVm { get; }
 
     public ObservableCollection<TreeNode> Tree { get; } = new();
-    public ObservableCollection<EditorTabViewModel> Tabs { get; } = new();
+    public ObservableCollection<TabViewModelBase> Tabs { get; } = new();
     public ObservableCollection<ProjectEntry> Projects { get; } = new();
 
-    [ObservableProperty] private EditorTabViewModel? _activeTab;
+    [ObservableProperty] private TabViewModelBase? _activeTab;
     [ObservableProperty] private string _status = "Ready";
     [ObservableProperty] private ProjectEntry? _startupProject;
     [ObservableProperty] private string? _solutionName;
@@ -78,11 +78,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public async Task OpenFileAsync(string path, int line = 1, int col = 1)
     {
-        EditorTabViewModel? tab = null;
+        TabViewModelBase? tab = null;
         foreach (var t in Tabs) if (t.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase)) { tab = t; break; }
         if (tab is null)
         {
-            tab = new EditorTabViewModel(path);
+            tab = TabViewModelBase.CreateForFile(path);
             tab.RequestClose += CloseTabAsync;
             Tabs.Add(tab);
         }
@@ -90,7 +90,7 @@ public partial class MainWindowViewModel : ViewModelBase
         await Task.CompletedTask;
     }
 
-    private async Task CloseTabAsync(EditorTabViewModel tab)
+    private async Task CloseTabAsync(TabViewModelBase tab)
     {
         if (tab.IsDirty) await tab.SaveAsync();
         Tabs.Remove(tab);

@@ -92,14 +92,14 @@ public partial class MainWindow : Window
 
     private async void OnCloseTabClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button b && b.Tag is EditorTabViewModel tab)
+        if (sender is Button b && b.Tag is TabViewModelBase tab)
             await tab.CloseCommand.ExecuteAsync(null);
     }
 
     private static string? GetTargetPath(object? dataContext) => dataContext switch
     {
         TreeNode { Path: not null } tn => tn.Path,
-        EditorTabViewModel tab => tab.FilePath,
+        TabViewModelBase tab => tab.FilePath,
         _ => null
     };
 

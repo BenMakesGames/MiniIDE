@@ -115,3 +115,24 @@ Grep `EditorTabViewModel` after refactor. Remaining refs should be: `EditorTabVi
 - [ ] Right-click image tab header → Open in Explorer / Copy absolute path / Copy relative path — all three work.
 - [ ] Open same image path twice (double-click, then double-click again) — no duplicate tab; existing tab activates.
 - [ ] With both an editor tab and an image tab open, switch between them repeatedly — image renders each activation; editor content stays intact.
+
+## Learnings
+
+### Architectural decisions
+- **Base type: abstract class** (Open Decision 1 default). Fields + `[ObservableProperty]` on `_isDirty` need `partial` on the class; interfaces can't host source-generated observable props ergonomically.
+- **Viewbox around Image** (Open Decision 2 default). `Stretch="Uniform"` on Viewbox gives fit-to-view without any manual layout code.
+- **Error display via single template, dual-child Grid + `IsVisible`** (Open Decision 3 default). Uses `ObjectConverters.IsNotNull` — built into `Avalonia.Data.Converters`, no custom converter needed. `Image` and `Error` are never both non-null since the ctor either sets one path or the catch path.
+- **Factory location: `TabViewModelBase.CreateForFile`** (Open Decision 4 default). Static factory on base — mirrors `HighlightModeExtensions.FromExtension` precedent from the XML/JSON highlighting ticket.
+- **`SaveCommand` on base as a plain field, not `[RelayCommand]`.** `[RelayCommand]` on an abstract method wouldn't compile (generator wraps a method body). `[RelayCommand]` on a virtual method with a default body would work, but constructing `new AsyncRelayCommand(SaveAsync)` in the base ctor is explicit and captures the method group with virtual dispatch — derived overrides run correctly.
+
+### Interesting tidbits
+- Avalonia `TabControl.DataTemplates` collection replaces the single-typed `TabControl.ContentTemplate`. Runtime picks the template whose `DataType` matches the item's runtime type. The item-header `ItemTemplate` still points at the base type (`vm:TabViewModelBase`) because `Header` binds on the base.
+- `Avalonia.Data.Converters.ObjectConverters.IsNotNull` is the idiomatic in-repo way to bind visibility to null/non-null of a reference property — no need for a custom `IValueConverter`.
+
+### Problems encountered
+- **Build lock**: the running `MiniIde.exe` locked its own output DLL; first `dotnet build` failed with `MSB3027`. Fixed by killing the running instance before rebuilding. Cost: nothing lost — compile step had already succeeded; only the copy step failed.
+
+### Rejected alternatives
+- `[RelayCommand]` on a virtual `SaveAsync` in the base — would work but leaks a "default no-op" implementation into the base. Abstract + hand-built `AsyncRelayCommand` in the ctor is cleaner.
+- Interface-based `ITabViewModel` — `CommunityToolkit.Mvvm` observable-prop source generator wants a `partial class`, not an interface; would have needed manual `INotifyPropertyChanged` plumbing on each concrete VM.
+- Separate error `DataTemplate` — Avalonia's `TabControl.DataTemplates` picks by runtime type, so error and success would need two subclasses to route to different templates. Single template with `IsVisible` toggling is smaller.

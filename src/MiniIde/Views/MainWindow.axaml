@@ -89,7 +89,7 @@
 
                 <TabControl Grid.Column="2" Background="#1E1E22" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
                     <TabControl.ItemTemplate>
-                        <DataTemplate DataType="vm:EditorTabViewModel">
+                        <DataTemplate DataType="vm:TabViewModelBase">
                             <StackPanel Orientation="Horizontal">
                                 <StackPanel.ContextMenu>
                                     <ContextMenu>
@@ -103,7 +103,7 @@
                             </StackPanel>
                         </DataTemplate>
                     </TabControl.ItemTemplate>
-                    <TabControl.ContentTemplate>
+                    <TabControl.DataTemplates>
                         <DataTemplate DataType="vm:EditorTabViewModel">
                             <ae:TextEditor ShowLineNumbers="True"
                                            FontFamily="Consolas,monospace"
@@ -114,7 +114,23 @@
                                            AttachedToVisualTree="OnEditorAttached"
                                            DataContextChanged="OnEditorDataContextChanged"/>
                         </DataTemplate>
-                    </TabControl.ContentTemplate>
+                        <DataTemplate DataType="vm:ImageTabViewModel">
+                            <Grid Background="#1E1E22">
+                                <Viewbox Stretch="Uniform"
+                                         StretchDirection="DownOnly"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center"
+                                         IsVisible="{Binding Image, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                    <Image Source="{Binding Image}"/>
+                                </Viewbox>
+                                <TextBlock Text="{Binding Error}"
+                                           Foreground="#DCDCDC"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </TabControl.DataTemplates>
                 </TabControl>
             </Grid>
 

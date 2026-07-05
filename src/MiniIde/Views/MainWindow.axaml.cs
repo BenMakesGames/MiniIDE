@@ -27,7 +27,6 @@ public partial class MainWindow : Window
 
     public IRelayCommand OpenSolutionDialogCommand { get; }
     public IRelayCommand SaveActiveCommand { get; }
-    public IRelayCommand FocusFindCommand { get; }
     public IRelayCommand GoToDefinitionCommand { get; }
     public IRelayCommand FindRefsCommand { get; }
 
@@ -36,7 +35,6 @@ public partial class MainWindow : Window
         InitializeComponent();
         OpenSolutionDialogCommand = new RelayCommand(async () => await OpenSolutionDialogAsync());
         SaveActiveCommand = new RelayCommand(async () => await SaveActiveAsync());
-        FocusFindCommand = new RelayCommand(FocusFind);
         GoToDefinitionCommand = new RelayCommand(async () => await GoToDefinitionAsync());
         FindRefsCommand = new RelayCommand(async () => await FindRefsAsync());
         DataContextChanged += (_, _) =>
@@ -79,7 +77,6 @@ public partial class MainWindow : Window
     private async void OnOpenSolutionClick(object? sender, RoutedEventArgs e) => await OpenSolutionDialogAsync();
     private async void OnSaveClick(object? sender, RoutedEventArgs e) => await SaveActiveAsync();
     private void OnExitClick(object? sender, RoutedEventArgs e) => Close();
-    private void OnFocusFindClick(object? sender, RoutedEventArgs e) => FocusFind();
     private async void OnGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
     private async void OnFindRefsClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
@@ -166,8 +163,18 @@ public partial class MainWindow : Window
 
     private void FocusFind()
     {
-        var box = this.FindControl<TextBox>("FindBox");
-        box?.Focus();
+        var tabs = this.FindControl<TabControl>("BottomTabs");
+        var findTab = this.FindControl<TabItem>("FindTab");
+        if (tabs is not null && findTab is not null)
+            tabs.SelectedItem = findTab;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            var box = this.FindControl<TextBox>("FindBox");
+            if (box is null) return;
+            box.Focus();
+            box.SelectAll();
+        }, DispatcherPriority.Background);
     }
 
     private async Task OpenSolutionDialogAsync()

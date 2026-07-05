@@ -10,6 +10,7 @@
         x:Class="MiniIde.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="MiniIde"
+        Icon="/Assets/icon.ico"
         Background="#1E1E22">
     <Grid RowDefinitions="Auto,Auto,*,Auto">
         <Menu Grid.Row="0" Background="#1E1E22">
@@ -20,28 +21,29 @@
                 <MenuItem Header="E_xit" Click="OnExitClick"/>
             </MenuItem>
             <MenuItem Header="_Navigate">
-                <MenuItem Header="_Find in Files" Click="OnFocusFindClick"/>
                 <MenuItem Header="Go to _Definition (F12)" Click="OnGoToDefClick"/>
                 <MenuItem Header="Find _References (Shift+F12)" Click="OnFindRefsClick"/>
             </MenuItem>
         </Menu>
 
-        <Grid Grid.Row="1" Margin="8,4" Background="#1E1E22" ColumnDefinitions="Auto,*,Auto">
-            <TextBlock Grid.Column="0" Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18"/>
-            <StackPanel Grid.Column="2" Orientation="Horizontal">
-                <ComboBox Width="280"
-                          ItemsSource="{Binding Projects}"
-                          SelectedItem="{Binding StartupProject}">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate DataType="m:ProjectEntry">
-                            <TextBlock Text="{Binding Display}"/>
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
-                <Button Content="▶ Play" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
-                <Button Content="■ Stop" Margin="4,0,0,0" Command="{Binding StopCommand}"/>
-            </StackPanel>
-        </Grid>
+        <Border Grid.Row="1" Background="#1E1E22" BorderThickness="0,0,0,1" BorderBrush="#40808080">
+            <Grid Margin="8,4" ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0" Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <ComboBox Width="280"
+                              ItemsSource="{Binding Projects}"
+                              SelectedItem="{Binding StartupProject}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate DataType="m:ProjectEntry">
+                                <TextBlock Text="{Binding Display}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Content="▶ Play" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
+                    <Button Content="■ Stop" Margin="4,0,0,0" Command="{Binding StopCommand}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
 
         <Grid Grid.Row="2" ColumnDefinitions="280,4,*">
             <TreeView Grid.Column="0" Background="#1E1E22" ItemsSource="{Binding Tree}" x:Name="SolutionTree" DoubleTapped="OnTreeDoubleTapped">
@@ -81,8 +83,8 @@
 
                 <GridSplitter Grid.Row="1" Background="#2D2D30"/>
 
-                <TabControl Grid.Row="2" Background="#1E1E22">
-                    <TabItem Header="Find">
+                <TabControl Grid.Row="2" Background="#1E1E22" x:Name="BottomTabs">
+                    <TabItem Header="Find" x:Name="FindTab">
                         <Grid RowDefinitions="Auto,*,Auto" DataContext="{Binding Find}">
                             <DockPanel Grid.Row="0" Margin="4">
                                 <CheckBox DockPanel.Dock="Right" Content="Regex" IsChecked="{Binding UseRegex}" Margin="6,0,0,0"/>

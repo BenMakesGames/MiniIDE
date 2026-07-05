@@ -13,7 +13,7 @@ public class SolutionService
     public string? SolutionPath { get; private set; }
     public IReadOnlyList<ProjectEntry> Projects { get; private set; } = System.Array.Empty<ProjectEntry>();
 
-    public async Task<TreeNode> LoadAsync(string path, CancellationToken ct = default)
+    public async Task<IReadOnlyList<TreeNode>> LoadAsync(string path, CancellationToken ct = default)
     {
         SolutionPath = path;
         var dir = Path.GetDirectoryName(path)!;
@@ -22,7 +22,7 @@ public class SolutionService
         SolutionModel model = await serializer.OpenAsync(path, ct);
 
         var entries = new List<ProjectEntry>();
-        var root = new TreeNode { Name = Path.GetFileName(path), Kind = NodeKind.Solution, Path = path, IsExpanded = true };
+        var projectNodes = new List<TreeNode>();
         foreach (var p in model.SolutionProjects)
         {
             var abs = Path.GetFullPath(Path.Combine(dir, p.FilePath));
@@ -37,10 +37,10 @@ public class SolutionService
                 Path = abs
             };
             PopulateProjectFiles(projNode);
-            root.Children.Add(projNode);
+            projectNodes.Add(projNode);
         }
         Projects = entries;
-        return root;
+        return projectNodes;
     }
 
     public static void PopulateProjectFiles(TreeNode projectNode)

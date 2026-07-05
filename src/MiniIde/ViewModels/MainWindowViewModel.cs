@@ -31,6 +31,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private EditorTabViewModel? _activeTab;
     [ObservableProperty] private string _status = "Ready";
     [ObservableProperty] private ProjectEntry? _startupProject;
+    [ObservableProperty] private string? _solutionName;
 
     public event Func<string, int, int, Task>? RequestOpen;
 
@@ -56,13 +57,14 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             Status = "Loading solution...";
-            var root = await Solution.LoadAsync(path);
+            var projectNodes = await Solution.LoadAsync(path);
             Tree.Clear();
-            Tree.Add(root);
+            foreach (var n in projectNodes) Tree.Add(n);
             Projects.Clear();
             foreach (var e in Solution.Projects) Projects.Add(e);
             NuGetVm.SetProjects(Solution.Projects);
             StartupProject = PickDefaultStartup(Solution.Projects);
+            SolutionName = Path.GetFileNameWithoutExtension(path);
             Status = $"Loaded {Path.GetFileName(path)} ({Solution.Projects.Count} projects)";
         }
         catch (Exception ex) { Status = ex.Message; }

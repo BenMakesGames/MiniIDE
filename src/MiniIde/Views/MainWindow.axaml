@@ -19,34 +19,29 @@
                 <Separator/>
                 <MenuItem Header="E_xit" Click="OnExitClick"/>
             </MenuItem>
-            <MenuItem Header="_Edit">
-                <MenuItem Header="_Find in Files" Click="OnFocusFindClick"/>
-            </MenuItem>
             <MenuItem Header="_Navigate">
+                <MenuItem Header="_Find in Files" Click="OnFocusFindClick"/>
                 <MenuItem Header="Go to _Definition (F12)" Click="OnGoToDefClick"/>
                 <MenuItem Header="Find _References (Shift+F12)" Click="OnFindRefsClick"/>
             </MenuItem>
-            <MenuItem Header="_Run">
-                <MenuItem Header="_Play (F5)" Command="{Binding PlayCommand}"/>
-                <MenuItem Header="_Stop" Command="{Binding StopCommand}"/>
-            </MenuItem>
         </Menu>
 
-        <DockPanel Grid.Row="1" Margin="4" Background="#1E1E22">
-            <TextBlock DockPanel.Dock="Left" Text="Startup:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-            <ComboBox DockPanel.Dock="Left" Width="280"
-                      ItemsSource="{Binding Projects}"
-                      SelectedItem="{Binding StartupProject}">
-                <ComboBox.ItemTemplate>
-                    <DataTemplate DataType="m:ProjectEntry">
-                        <TextBlock Text="{Binding Display}"/>
-                    </DataTemplate>
-                </ComboBox.ItemTemplate>
-            </ComboBox>
-            <Button DockPanel.Dock="Left" Content="▶ Play" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
-            <Button DockPanel.Dock="Left" Content="■ Stop" Margin="4,0,0,0" Command="{Binding StopCommand}"/>
-            <TextBlock/>
-        </DockPanel>
+        <Grid Grid.Row="1" Margin="8,4" Background="#1E1E22" ColumnDefinitions="Auto,*,Auto">
+            <TextBlock Grid.Column="0" Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18"/>
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <ComboBox Width="280"
+                          ItemsSource="{Binding Projects}"
+                          SelectedItem="{Binding StartupProject}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate DataType="m:ProjectEntry">
+                            <TextBlock Text="{Binding Display}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Content="▶ Play" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
+                <Button Content="■ Stop" Margin="4,0,0,0" Command="{Binding StopCommand}"/>
+            </StackPanel>
+        </Grid>
 
         <Grid Grid.Row="2" ColumnDefinitions="280,4,*">
             <TreeView Grid.Column="0" Background="#1E1E22" ItemsSource="{Binding Tree}" x:Name="SolutionTree" DoubleTapped="OnTreeDoubleTapped">
@@ -66,7 +61,7 @@
                         <DataTemplate DataType="vm:EditorTabViewModel">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="{Binding Header}"/>
-                                <Button Content="✕" Margin="6,0,0,0" Padding="4,0" Click="OnCloseTabClick" Tag="{Binding}"/>
+                                <Button Content="✕" Margin="6,0,0,0" Padding="4,0" FontSize="12" MinHeight="0" MinWidth="0" Click="OnCloseTabClick" Tag="{Binding}"/>
                             </StackPanel>
                         </DataTemplate>
                     </TabControl.ItemTemplate>
@@ -95,7 +90,7 @@
                                 <TextBox x:Name="FindBox" Text="{Binding Query, Mode=TwoWay}" Watermark="Search..."
                                          KeyDown="OnFindKeyDown"/>
                             </DockPanel>
-                            <ListBox Grid.Row="1" ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}">
+                            <ListBox Grid.Row="1" Background="#000000" ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="m:FindHit">
                                         <TextBlock>
@@ -109,7 +104,7 @@
                     </TabItem>
 
                     <TabItem Header="Output">
-                        <ListBox ItemsSource="{Binding Output.Lines}" FontFamily="Consolas,monospace"/>
+                        <ListBox Background="#000000" ItemsSource="{Binding Output.Lines}" FontFamily="Consolas,monospace"/>
                     </TabItem>
 
                     <TabItem Header="NuGet">
@@ -121,7 +116,7 @@
                                 <CheckBox Content="Prerelease" IsChecked="{Binding IncludePrerelease}" Margin="10,0,0,0"/>
                             </StackPanel>
 
-                            <ListBox Grid.Row="1" Grid.Column="0" ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}">
+                            <ListBox Grid.Row="1" Grid.Column="0" Background="#000000" ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="m:ProjectEntry">
                                         <TextBlock Text="{Binding Display}"/>
@@ -129,7 +124,7 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                             <GridSplitter Grid.Row="1" Grid.Column="1" Background="#2D2D30"/>
-                            <ListBox Grid.Row="1" Grid.Column="2" ItemsSource="{Binding Packages}" SelectedItem="{Binding SelectedPackage}">
+                            <ListBox Grid.Row="1" Grid.Column="2" Background="#000000" ItemsSource="{Binding Packages}" SelectedItem="{Binding SelectedPackage}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="m:PackageEntry">
                                         <TextBlock>
@@ -139,7 +134,7 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                             <GridSplitter Grid.Row="1" Grid.Column="3" Background="#2D2D30"/>
-                            <ListBox Grid.Row="1" Grid.Column="4" ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"/>
+                            <ListBox Grid.Row="1" Grid.Column="4" Background="#000000" ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"/>
 
                             <DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5" Margin="4">
                                 <Button DockPanel.Dock="Right" Content="Apply + Restore" Command="{Binding ApplyCommand}"/>

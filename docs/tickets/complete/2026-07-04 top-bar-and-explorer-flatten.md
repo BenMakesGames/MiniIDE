@@ -71,3 +71,23 @@ No XAML change needed for the `TreeView` itself — top-level items are already 
 - [ ] Double-tap a project node — its files appear (existing lazy-populate).
 - [ ] Open a second, different solution — left-zone name updates, project list swaps, no stale project nodes remain in the tree.
 - [ ] Play / Stop still work against the selected startup project.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decision #1 (name format)**: chose filename without extension (`MiniIde`). `Path.GetFileNameWithoutExtension(path)` on `OpenSolutionAsync`'s `path` arg — cheaper than reaching through `Solution.SolutionPath` and reads clearer.
+- **Open Decision #2 (`LoadAsync` return shape)**: signature changed to `Task<IReadOnlyList<TreeNode>>`. Sole caller (`MainWindowViewModel.OpenSolutionAsync`) confirmed via grep before change. Wrapping `TreeNode` root removed entirely — no leftover consumer.
+- **Open Decision #3 (top-bar container)**: `Grid ColumnDefinitions="Auto,*,Auto"` with left `TextBlock`, right `StackPanel`. Intent-explicit — no dependence on `DockPanel` declaration ordering quirks.
+- `NodeKind.Solution` enum value left untouched. No `TreeNode` of that kind is constructed anymore, but ticket explicitly told us to leave the type alone.
+
+### Interesting tidbits
+- `SolutionName` bound directly on `TextBlock.Text` — Avalonia renders `null` string as empty (no `TargetNullValue` needed), so no-solution state is empty by default.
+- Row 1's Grid preserves the outer `Background="#1E1E22"` and `Margin="4"` so the toolbar strip looks identical apart from the split.
+- Pre-existing `Watermark` obsolescence warning on row 96 is unrelated to this change.
+
+### Related areas affected
+- None outside the three files named in Scope. `SolutionServiceExtensions.EnsureExpanded` still works because project nodes are still the same `TreeNode` instances just placed at the top level.
+
+### Rejected alternatives
+- Keep root `TreeNode` + flatten in VM by iterating `root.Children` — rejected; leaves a vestigial wrapper type in `SolutionService` for no consumer. Ticket's Open Decision #2 default agreed.
+- `DockPanel` with `Dock="Right"` group — rejected; requires right-first declaration ordering to render flush-right, less obvious than a Grid.

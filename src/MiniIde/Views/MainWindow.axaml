@@ -33,9 +33,25 @@
                     <ComboBox Width="280"
                               ItemsSource="{Binding Projects}"
                               SelectedItem="{Binding StartupProject}">
+                        <ComboBox.Styles>
+                            <Style Selector="ComboBoxItem" x:DataType="m:ProjectEntry">
+                                <Setter Property="IsEnabled" Value="{Binding IsRunnable}"/>
+                            </Style>
+                            <Style Selector="ComboBoxItem:disabled">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Style>
+                        </ComboBox.Styles>
                         <ComboBox.ItemTemplate>
                             <DataTemplate DataType="m:ProjectEntry">
-                                <TextBlock Text="{Binding Display}"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding IconGlyph}"
+                                               FontFamily="{StaticResource IconFont}"
+                                               FontSize="16"
+                                               Foreground="{Binding IconColor}"
+                                               Margin="0,0,6,0"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                </StackPanel>
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
@@ -127,7 +143,15 @@
                             <ListBox Grid.Row="1" Grid.Column="0" Background="#000000" ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="m:ProjectEntry">
-                                        <TextBlock Text="{Binding Display}"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding IconGlyph}"
+                                                       FontFamily="{StaticResource IconFont}"
+                                                       FontSize="16"
+                                                       Foreground="{Binding IconColor}"
+                                                       Margin="0,0,6,0"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                        </StackPanel>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>

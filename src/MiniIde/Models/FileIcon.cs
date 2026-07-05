@@ -36,7 +36,7 @@ public static class FileIconMap
         _                 => (FileIcon.Unknown, FileIconPalette.Unknown),
     };
 
-    private static (string, IBrush) FromProjectKind(ProjectKind kind) => kind switch
+    public static (string Glyph, IBrush Color) FromProjectKind(ProjectKind kind) => kind switch
     {
         Models.ProjectKind.Exe => (FileIcon.ProjectExe, FileIconPalette.ProjectExe),
         Models.ProjectKind.Lib => (FileIcon.ProjectLib, FileIconPalette.ProjectLib),

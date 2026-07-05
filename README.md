@@ -4,11 +4,15 @@
 
 ### why?
 
-I love Rider - it's been my favorite C# IDE for years - but like all good IDEs, it's a resource hog that eats laptop batteries for breakfast, and I get why: Rider & Visual Studio are built to support every use case anyone ever wanted and asked for.
+I love Rider - it's been my favorite C# IDE for years - but like all IDEs, it's a resource hog that eats laptop batteries for breakfast, and I get why: Rider & Visual Studio are built to support every use case anyone ever wanted and asked for.
 
 but of all the features Rider offers, I've only used very few; with agentic AIs, I use fewer still.
 
 (I've tried vscode various times over the years: its UI/UX is simply not to my liking, and their C# support has always been lacking (they only _recently_ got solution support?? 'the heck?!?))
+
+so, like any ridiculous dev, "I made my own."
+
+![](docs/screenshot.png)
 
 ### my must-haves
 

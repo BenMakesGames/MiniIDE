@@ -97,11 +97,12 @@ public partial class MainWindowViewModel : ViewModelBase
         if (ActiveTab == tab) ActiveTab = Tabs.Count > 0 ? Tabs[0] : null;
     }
 
-    [RelayCommand]
+    private bool CanPlay() => StartupProject?.IsRunnable == true;
+
+    [RelayCommand(CanExecute = nameof(CanPlay))]
     public async Task PlayAsync()
     {
         if (StartupProject is null) { Status = "No startup project"; return; }
-        if (StartupProject.Kind == ProjectKind.Lib) { Status = "Cannot run library project"; return; }
         Output.Clear();
         var name = Path.GetFileNameWithoutExtension(StartupProject.Path);
         Status = StartupProject.Kind == ProjectKind.Tst ? $"Testing {name}..." : $"Running {name}...";
@@ -109,8 +110,14 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { Status = ex.Message; }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanPlay))]
     public void Stop() { Run.Stop(); Status = "Stopped"; }
+
+    partial void OnStartupProjectChanged(ProjectEntry? value)
+    {
+        PlayCommand.NotifyCanExecuteChanged();
+        StopCommand.NotifyCanExecuteChanged();
+    }
 
     public async Task<(string, int, int)?> GoToDefinitionAsync(string file, int position)
     {

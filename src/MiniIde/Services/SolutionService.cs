@@ -28,8 +28,7 @@ public class SolutionService
             var abs = Path.GetFullPath(Path.Combine(dir, p.FilePath));
             var kind = ProjectClassifier.Classify(abs);
             var name = Path.GetFileNameWithoutExtension(p.FilePath);
-            var display = $"{kind.ToString().ToLowerInvariant()} {name}";
-            entries.Add(new ProjectEntry(abs, display, kind));
+            entries.Add(new ProjectEntry(abs, name, kind));
             var projNode = new TreeNode
             {
                 Name = name,

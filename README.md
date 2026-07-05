@@ -10,7 +10,7 @@ but of all the features Rider offers, I've only used very few; with agentic AIs,
 
 (I've tried vscode various times over the years: its UI/UX is simply not to my liking, and their C# support has always been lacking (they only _recently_ got solution support?? 'the heck?!?))
 
-so, like any ridiculous dev, "I made my own."
+so, like any ridiculous dev, I've decided to "just" make my own...
 
 ![](docs/screenshot.png)
 

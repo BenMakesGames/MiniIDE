@@ -42,6 +42,7 @@ public partial class MainWindow : Window
             if (Vm is not null) Vm.RequestOpen += OpenHit;
         };
         KeyDown += OnGlobalKeyDown;
+        SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
     }
 
     private async void OnGlobalKeyDown(object? sender, KeyEventArgs e)
@@ -93,6 +94,17 @@ public partial class MainWindow : Window
             if (node.Kind == NodeKind.Project) Services.SolutionServiceExtensions.EnsureExpanded(node);
             else if (node.Kind == NodeKind.File && node.Path is not null)
                 await Vm.OpenFileAsync(node.Path);
+        }
+    }
+
+    private async void OnTreeKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        if (sender is not TreeView tv || tv.SelectedItem is not TreeNode node) return;
+        if (node.Kind == NodeKind.File && node.Path is not null)
+        {
+            e.Handled = true;
+            await Vm.OpenFileAsync(node.Path);
         }
     }
 
@@ -174,16 +186,33 @@ public partial class MainWindow : Window
         b.CurrentDoc = tab.Document;
         editor.Document = tab.Document;
 
-        b.TextChangedHandler = async (_, _) => await RefreshAndRedraw(b.Colorizer!, editor, tab.IsCSharp);
+        b.TextChangedHandler = async (_, _) => await RefreshAndRedraw(b.Colorizer!, editor, tab.Mode);
         tab.Document.TextChanged += b.TextChangedHandler;
 
-        _ = RefreshAndRedraw(b.Colorizer!, editor, tab.IsCSharp);
+        _ = RefreshAndRedraw(b.Colorizer!, editor, tab.Mode);
     }
 
-    private static async Task RefreshAndRedraw(RoslynColorizer colorizer, TextEditor editor, bool isCSharp)
+    private static async Task RefreshAndRedraw(RoslynColorizer colorizer, TextEditor editor, HighlightMode mode)
     {
-        if (!isCSharp) { colorizer.Clear(); editor.TextArea.TextView.Redraw(); return; }
-        await colorizer.RefreshAsync(editor.Document.Text);
+        switch (mode)
+        {
+            case HighlightMode.CSharp:
+                editor.SyntaxHighlighting = null;
+                await colorizer.RefreshAsync(editor.Document.Text);
+                break;
+            case HighlightMode.Xml:
+                colorizer.Clear();
+                editor.SyntaxHighlighting = XshdDarkPalette.Tune("XML");
+                break;
+            case HighlightMode.Json:
+                colorizer.Clear();
+                editor.SyntaxHighlighting = XshdDarkPalette.Tune("Json");
+                break;
+            default:
+                colorizer.Clear();
+                editor.SyntaxHighlighting = null;
+                break;
+        }
         editor.TextArea.TextView.Redraw();
     }
 

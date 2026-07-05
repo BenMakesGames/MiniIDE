@@ -84,3 +84,21 @@ Run the app, open `MiniIde.csproj`, `MiniIde.slnx`, and (create if needed) a scr
 - [ ] Rapidly cycle through open tabs `.cs` → `.csproj` → `.json` → `.cs` several times — each tab's colorization matches its type; no bleed-over.
 - [ ] Edit a `.csproj` (e.g., add a whitespace character) — xshd tracks the edit; colorization stays consistent.
 - [ ] Edit a `.cs` file — Roslyn re-classifies as before (existing debounce/refresh behavior preserved).
+
+## Learnings
+
+- **Enum + helper co-located** (Open Decision #1, #2 → both defaults taken): `HighlightMode` enum and `HighlightModeExtensions.FromExtension` live in same file `Models/HighlightMode.cs`. Matches `ProjectKind` precedent for enum-per-file; the tiny helper doesn't warrant its own file.
+- **Case-insensitive throughout** (Open Decision #3 → default): `FromExtension` uses `StringComparison.OrdinalIgnoreCase` for every extension check, mirroring the previous `IsCSharp` idiom.
+- **Dispatch is a `switch` in `RefreshAndRedraw`, not the caller**: caller (`BindEditor`) still calls `RefreshAndRedraw(colorizer, editor, tab.Mode)` once; the switch handles CSharp/Xml/Json/None. Keeps both `TextChanged` handler and initial invocation on the same code path — no duplication.
+- **`RoslynColorizer` stays attached always**: line transformer added once per editor in `_bindings` init. For non-CSharp modes, `colorizer.Clear()` empties `_spans`; `ColorizeLine`'s foreach exits immediately. No add/remove churn per file switch.
+- **Both color sources cleared on every mode switch**: any transition explicitly clears the *other* source (`editor.SyntaxHighlighting = null` on CSharp, `colorizer.Clear()` on Xml/Json/None). Prevents residual color bleeding when the same TextEditor is rebound to a different tab.
+- **AvaloniaEdit definition names** (verified via scratch enumerator on `Avalonia.AvaloniaEdit` 12.0.0): `"XML"` (all caps) and `"Json"` (title case). Case-exact when passed to `HighlightingManager.Instance.GetDefinition`.
+- **Xshd readability tuning applied inline** (Open Decision #4 → deviation from default): stock palettes shipped illegible on the dark theme — `Json.Punctuation` was literally `Black`, making braces/brackets/commas invisible on `#000000` bg. Verified via scratch enumerator dumping `NamedHighlightingColors.Foreground`. Added `Views/XshdDarkPalette.cs` with `Tune(name)` — mutates the shared `IHighlightingDefinition` once per name, reassigning foregrounds to a VS-Code-dark-aligned palette (comment green `#6A9955`, string orange `#CE9178`, keyword blue `#569CD6`, num green `#B5CEA8`, property light-blue `#9CDCFE`, punctuation `#DCDCDC` matching editor default). Structural chars that xshd doesn't name still inherit `editor.Foreground = #DCDCDC` and stay legible.
+- **`HighlightingManager.Instance.GetDefinition` returns a shared instance**: mutating `NamedHighlightingColors[i].Foreground` persists globally. `XshdDarkPalette.Tune` guards with a `HashSet<string>` so overrides apply once per name.
+- **Stock xshd named colors, verified via scratch enumerator on `Avalonia.AvaloniaEdit` 12.0.0**:
+  - XML: `Comment` (Green), `CData` (Blue), `DocType` (Blue), `XmlDeclaration` (Blue), `XmlTag` (DarkMagenta), `AttributeName` (Red), `AttributeValue` (Blue), `Entity` (Teal), `BrokenEntity` (Olive).
+  - Json: `Bool` (Blue), `Number` (Red), `String` (Green), `Null` (Olive), `FieldName` (DarkMagenta), `Punctuation` (Black).
+- **Pre-existing unused `using System.IO;`** in `MainWindow.axaml.cs` was surfaced as a new LSP diagnostic during this ticket; left alone to keep scope tight. Candidate for a general cleanup pass.
+- **Related area affected**: `.axaml` files (`App.axaml`, `Views/MainWindow.axaml`) now colorize as XML. XAML-specific bits (namespaces, `{Binding …}` markup extensions) render as plain XML attribute values — expected, worth noting for the MSBuild-aware / XAML-aware follow-up.
+- **Rejected alternative — extension-based mapping inline in `EditorTabViewModel` ctor**: rejected per Open Decision #2. Static helper next to the enum keeps mapping reusable and self-documenting.
+- **Rejected alternative — auto-detection by content**: explicitly out of scope. Extension is source of truth. Files with no/unknown extension render as plain text (`HighlightMode.None`), which is the desired fallback.

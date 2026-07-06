@@ -15,7 +15,7 @@ public partial class EditorTabViewModel : TabViewModelBase
 
     public EditorTabViewModel(string filePath) : base(filePath)
     {
-        Mode = HighlightModeExtensions.FromExtension(Path.GetExtension(filePath));
+        Mode = Path.GetExtension(filePath).ToFileKind().GetInfo().Highlight;
         Document = new TextDocument(File.ReadAllText(filePath));
         Document.TextChanged += (_, _) => { IsDirty = true; OnPropertyChanged(nameof(Header)); };
     }

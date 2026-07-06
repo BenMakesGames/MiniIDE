@@ -119,3 +119,26 @@ Rewrite `docs/global-find.md`: describe the managed lib, its scope (grep only, n
 - **Test project** — `src/BenMakesGames.FileGrepper.Tests/` with xUnit. Cover literal, regex, cancellation, skip predicate, binary skip, empty stream.
 - **`.gitignore`-aware search** — IDE-side reader that materializes a `Predicate<string>` from repo `.gitignore` and hands it to `FileGrepper`.
 - **`docs/stack.md` .NET version drift** — file says `.NET 9`; `MiniIde.csproj` targets `net10.0`. Doc fix.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decisions — all four taken at default.** Parameterless `SearchService` ctor (`FileGrepper` constructed as a stateless field). Unbounded `Channel`. Fresh `Regex` per call (no cache). Preview trimmed of trailing `\r`/`\n`.
+- **Exclusions live in the caller, not the lib.** `FileGrepper` ships no prune list — `SearchService` owns the hardcoded dir skip set and passes a `SkipDirectory` predicate over full paths. Keeps the engine a pure grep primitive (KISS / least surprise).
+- **Producer/consumer via a linked CTS.** `GrepAsync` runs the `Parallel.ForEachAsync` pump as a detached task writing to the channel; the iterator reads the channel under the caller's `ct`. A `CreateLinkedTokenSource(ct)` drives the pump so that **either** external cancellation **or** early enumerator disposal winds the walk down promptly — a caller that `break`s without cancelling won't hang on a full directory walk. The pump funnels its terminal state (success, cancellation, or hard failure like a missing root) through `channel.Writer.Complete(ex)`, so exceptions surface cleanly to the reader with no unobserved-task risk.
+
+### Problems encountered
+- **`RegexOptions.NonBacktracking | RegexOptions.Compiled` is illegal** — the two are mutually exclusive; combining them throws at `Regex` construction. The ticket's step 6 specified both. Kept `NonBacktracking` (ReDoS safety on user-typed patterns, which the ticket deliberately chose over rg-compatibility) and dropped `Compiled`. Interactive search doesn't benefit enough from `Compiled` to justify losing the linear-time guarantee.
+- **`Encoding.UTF8` never throws on bad bytes** — the shared instance uses replacement-char fallback, so "skip files that fail UTF-8 decode" (a Constraint) wouldn't actually skip anything. Used `new UTF8Encoding(false, throwOnInvalidBytes: true)` and caught `DecoderFallbackException` (note: it derives from `ArgumentException`, **not** `IOException`, so it needs its own catch) to skip non-UTF-8 files silently. The NUL sniff catches most binaries first; the throwing decoder catches text in other encodings.
+
+### Interesting tidbits
+- `FileSystemEnumerable<T>` predicate/transform delegates take `ref FileSystemEntry` (a ref struct) — lambdas must be written `(ref FileSystemEntry entry) => ...`. `entry.ToFullPath()` yields the full path (no trailing separator, so `Path.GetFileName` returns the dir/file name cleanly). `ShouldRecursePredicate` gates directory descent; `ShouldIncludePredicate` also fires for directories, so filter with `!entry.IsDirectory`.
+- `Stream.ReadAtLeastAsync(buffer, len, throwOnEndOfStream: false, ct)` is the clean way to peek a fixed prefix for the binary sniff — reads until full or EOF in one call. (Async rules out the `stackalloc byte[8192]` the ticket sketched; a per-file heap buffer is negligible under `ProcessorCount` fan-out.)
+- `StreamReader.ReadLineAsync` already strips the line terminator, so the `TrimEnd('\r','\n')` is belt-and-suspenders to mirror the old rg-JSON behavior exactly.
+
+### Verification
+- Exercised the lib end-to-end via a throwaway console harness against this repo (no GUI): literal + regex parity, dir-skip (0/167 hits under bin/obj), 1-based column, binary-NUL skip, and pre-cancelled-token → `OperationCanceledException` all pass. GUI-level Test Plan items (run.ps1 launch, click-to-navigate) remain manual — engine + `SearchService` wiring proven, build clean.
+
+### Related areas affected
+- `docs/stack.md` still says **.NET 9** while the code targets `net10.0` — left as-is per ticket; tracked as the third spin-off follow-up.
+- Follow-up spin-offs remain open: FileGrepper test project, `.gitignore`-aware search predicate.

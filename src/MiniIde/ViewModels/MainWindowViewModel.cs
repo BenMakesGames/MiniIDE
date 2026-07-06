@@ -31,7 +31,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private TabViewModelBase? _activeTab;
     [ObservableProperty] private string _status = "Ready";
     [ObservableProperty] private ProjectEntry? _startupProject;
-    [ObservableProperty] private string? _solutionName;
+    [ObservableProperty] private string? _solutionName = "<no solution>";
 
     public event Func<string, int, int, Task>? RequestOpen;
 
@@ -72,7 +72,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private static ProjectEntry? PickDefaultStartup(System.Collections.Generic.IReadOnlyList<ProjectEntry> projects)
     {
-        foreach (var e in projects) if (e.Kind != ProjectKind.Lib) return e;
+        foreach (var e in projects) if (e.IsRunnable) return e;
         return projects.Count > 0 ? projects[0] : null;
     }
 
@@ -130,13 +130,18 @@ public partial class MainWindowViewModel : ViewModelBase
         return result;
     }
 
-    public async Task<System.Collections.Generic.IReadOnlyList<(string, int, int, string)>> FindReferencesAsync(string file, int position)
+    /// <summary>
+    /// Returns reference locations (possibly empty), or <c>null</c> when no symbol resolves at the position.
+    /// The null case sets a "No symbol found" status; callers use it to skip populating results.
+    /// </summary>
+    public async Task<System.Collections.Generic.IReadOnlyList<(string, int, int, string)>?> FindReferencesAsync(string file, int position)
     {
         if (Solution.SolutionPath is null) return System.Array.Empty<(string, int, int, string)>();
         Status = "Loading workspace...";
         await Workspace.EnsureLoadedAsync(Solution.SolutionPath);
         Status = "Finding references...";
         var refs = await Workspace.FindReferencesAsync(file, position);
+        if (refs is null) { Status = "No symbol found"; return null; }
         Status = $"{refs.Count} reference(s)";
         return refs;
     }

@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/BenMakesGames.FileGrepper/BenMakesGames.FileGrepper.csproj" />
     <Project Path="src/MiniIde/MiniIde.csproj" />
   </Folder>
 </Solution>

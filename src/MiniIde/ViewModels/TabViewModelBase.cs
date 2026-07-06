@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MiniIde.Models;
 
 namespace MiniIde.ViewModels;
 
@@ -30,14 +31,8 @@ public abstract partial class TabViewModelBase : ViewModelBase
 
     partial void OnIsDirtyChanged(bool value) => OnPropertyChanged(nameof(Header));
 
-    private static readonly string[] ImageExtensions =
-        { ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif" };
-
-    public static TabViewModelBase CreateForFile(string path)
-    {
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        foreach (var imageExt in ImageExtensions)
-            if (ext == imageExt) return new ImageTabViewModel(path);
-        return new EditorTabViewModel(path);
-    }
+    public static TabViewModelBase CreateForFile(string path) =>
+        Path.GetExtension(path).ToFileKind().GetInfo().OpensAsImageTab
+            ? new ImageTabViewModel(path)
+            : new EditorTabViewModel(path);
 }

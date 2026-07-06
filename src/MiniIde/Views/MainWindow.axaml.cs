@@ -16,7 +16,6 @@ using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Rendering;
-using CommunityToolkit.Mvvm.Input;
 using Microsoft.CodeAnalysis.Classification;
 using MiniIde.Models;
 using MiniIde.ViewModels;
@@ -34,24 +33,16 @@ public partial class MainWindow : Window
 
     private MainWindowViewModel Vm => (MainWindowViewModel)DataContext!;
 
-    public IRelayCommand OpenSolutionDialogCommand { get; }
-    public IRelayCommand SaveActiveCommand { get; }
-    public IRelayCommand GoToDefinitionCommand { get; }
-    public IRelayCommand FindRefsCommand { get; }
-
     public MainWindow()
     {
         InitializeComponent();
-        OpenSolutionDialogCommand = new RelayCommand(async () => await OpenSolutionDialogAsync());
-        SaveActiveCommand = new RelayCommand(async () => await SaveActiveAsync());
-        GoToDefinitionCommand = new RelayCommand(async () => await GoToDefinitionAsync());
-        FindRefsCommand = new RelayCommand(async () => await FindRefsAsync());
         DataContextChanged += (_, _) =>
         {
             if (Vm is not null) Vm.RequestOpen += OpenHit;
         };
         KeyDown += OnGlobalKeyDown;
         SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
+        SolutionTree.AddHandler(PointerPressedEvent, OnTreePointerPressed, RoutingStrategies.Tunnel);
     }
 
     private async void OnGlobalKeyDown(object? sender, KeyEventArgs e)
@@ -60,7 +51,7 @@ public partial class MainWindow : Window
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (ctrl && e.Key == Key.O) { e.Handled = true; await OpenSolutionDialogAsync(); }
         else if (ctrl && e.Key == Key.S) { e.Handled = true; await SaveActiveAsync(); }
-        else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; FocusFind(); }
+        else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; if (!TrySearchTermInEditor()) FocusFind(); }
         else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) await Vm.PlayCommand.ExecuteAsync(null); }
         else if (e.Key == Key.F12 && !shift) { e.Handled = true; await GoToDefinitionAsync(); }
         else if (e.Key == Key.F12 && shift) { e.Handled = true; await FindRefsAsync(); }
@@ -85,10 +76,6 @@ public partial class MainWindow : Window
     }
 
     private async void OnOpenSolutionClick(object? sender, RoutedEventArgs e) => await OpenSolutionDialogAsync();
-    private async void OnSaveClick(object? sender, RoutedEventArgs e) => await SaveActiveAsync();
-    private void OnExitClick(object? sender, RoutedEventArgs e) => Close();
-    private async void OnGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
-    private async void OnFindRefsClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
     private async void OnCloseTabClick(object? sender, RoutedEventArgs e)
     {
@@ -100,8 +87,55 @@ public partial class MainWindow : Window
     {
         TreeNode { Path: not null } tn => tn.Path,
         TabViewModelBase tab => tab.FilePath,
+        MainWindowViewModel vm => vm.Solution.SolutionPath,
         _ => null
     };
+
+    // Set once wt.exe fails to launch (absent execution alias); subsequent invocations skip straight to
+    // PowerShell for the app's lifetime. Resetting between app runs is fine.
+    private bool _wtUnavailable;
+
+    // With no solution loaded, every solution-scoped item is disabled; only "Open new solution..."
+    // stays live so a solution can be opened from the menu at startup.
+    private void OnSolutionCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (sender is not ContextMenu cm) return;
+        var hasSolution = Vm.Solution.SolutionPath is not null;
+        foreach (var item in cm.Items)
+            if (item is MenuItem mi && mi.Name != "SolutionCtxOpenNew")
+                mi.IsEnabled = hasSolution;
+    }
+
+    private void OnCtxOpenWithClaudeClick(object? sender, RoutedEventArgs e)
+    {
+        var slnPath = Vm.Solution.SolutionPath;
+        var dir = slnPath is null ? null : Path.GetDirectoryName(slnPath);
+        if (dir is null) { Vm.Status = "No solution open"; return; }
+
+        if (!_wtUnavailable)
+        {
+            try
+            {
+                var wt = new ProcessStartInfo { FileName = "wt.exe", UseShellExecute = true };
+                wt.ArgumentList.Add("-d");
+                wt.ArgumentList.Add(dir);
+                wt.ArgumentList.Add("claude");
+                Process.Start(wt);
+                return;
+            }
+            catch (Exception) { _wtUnavailable = true; } // wt not installed — fall through to PowerShell
+        }
+
+        try
+        {
+            var ps = new ProcessStartInfo { FileName = "powershell.exe", WorkingDirectory = dir, UseShellExecute = true };
+            ps.ArgumentList.Add("-NoExit");
+            ps.ArgumentList.Add("-Command");
+            ps.ArgumentList.Add("claude");
+            Process.Start(ps);
+        }
+        catch (Exception ex) { Vm.Status = $"Open with Claude Code failed: {ex.Message}"; }
+    }
 
     private void OnCtxOpenInExplorerClick(object? sender, RoutedEventArgs e)
     {
@@ -149,8 +183,14 @@ public partial class MainWindow : Window
         catch (Exception ex) { Vm.Status = $"Copy failed: {ex.Message}"; }
     }
 
-    private async void OnTreeDoubleTapped(object? sender, TappedEventArgs e)
+    // Open/expand on double-click via PointerPressed + ClickCount == 2 rather than DoubleTapped: the latter
+    // only fires when both presses resolve to the same source element, so it drops near row edges and right
+    // of the text (see docs/avalonia.md). PointerPressed fires wherever the press registers — everywhere
+    // selection already works. Tunnel-registered so it runs before TreeViewItem consumes the press; we must
+    // NOT set e.Handled, or selection would no longer commit on this press.
+    private async void OnTreePointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        if (e.ClickCount != 2) return;
         if (sender is TreeView tv && tv.SelectedItem is TreeNode node)
         {
             if (node.Kind == NodeKind.Project) Services.SolutionServiceExtensions.EnsureExpanded(node);
@@ -162,7 +202,7 @@ public partial class MainWindow : Window
     private async void OnSolutionNameDoubleTapped(object? sender, TappedEventArgs e)
     {
         var path = Vm.Solution.SolutionPath;
-        if (path is null) return;
+        if (path is null) { await OpenSolutionDialogAsync(); return; }
         await Vm.OpenFileAsync(path);
     }
 
@@ -244,6 +284,8 @@ public partial class MainWindow : Window
             {
                 if (editor.DataContext is EditorTabViewModel t) t.CaretOffset = editor.CaretOffset;
             };
+            // Tunnel so we place the caret before AvaloniaEdit's own pointer logic and before the menu opens.
+            editor.AddHandler(PointerPressedEvent, OnEditorPointerPressed, RoutingStrategies.Tunnel);
         }
 
         if (ReferenceEquals(b.CurrentTab, tab)) return;
@@ -344,10 +386,139 @@ public partial class MainWindow : Window
         var editor = FindActiveEditor();
         if (editor is null || Vm.ActiveTab is null) return;
         var refs = await Vm.FindReferencesAsync(Vm.ActiveTab.FilePath, editor.CaretOffset);
+        if (refs is null) { Vm.Find.Results.Clear(); Vm.Find.Status = "No symbol found"; return; }
+        PopulateRefs(refs);
+    }
+
+    private void PopulateRefs(System.Collections.Generic.IReadOnlyList<(string, int, int, string)> refs)
+    {
         Vm.Find.Results.Clear();
         foreach (var r in refs) Vm.Find.Results.Add(new FindHit(r.Item1, r.Item2, r.Item3, r.Item4));
         Vm.Find.Status = $"{refs.Count} reference(s)";
     }
+
+    // ── Code-editor context menu (Search / Find usages / Go to definition) ──
+
+    private static bool IsIdentifierChar(char c) => c == '_' || char.IsLetterOrDigit(c);
+
+    /// <summary>The [start, end) of the identifier run covering <paramref name="offset"/>, or an empty
+    /// range (start == end) when the offset is not on/adjacent to an identifier.</summary>
+    private static (int Start, int End) IdentifierRunAt(string text, int offset)
+    {
+        if (offset < 0) offset = 0;
+        if (offset > text.Length) offset = text.Length;
+        int start = offset, end = offset;
+        while (start > 0 && IsIdentifierChar(text[start - 1])) start--;
+        while (end < text.Length && IsIdentifierChar(text[end])) end++;
+        return (start, end);
+    }
+
+    /// <summary>The query term for the Search action: the selection if non-empty, else the identifier run
+    /// under the caret, else null.</summary>
+    private static string? TermAt(TextEditor editor)
+    {
+        var sel = editor.SelectedText;
+        if (!string.IsNullOrEmpty(sel)) return sel;
+        var text = editor.Document.Text;
+        var (start, end) = IdentifierRunAt(text, editor.CaretOffset);
+        return end > start ? text.Substring(start, end - start) : null;
+    }
+
+    /// <summary>A classification is ineligible for symbol actions when it names a keyword, string, comment,
+    /// number, operator, punctuation, excluded, or whitespace kind. Substring matching covers Roslyn's
+    /// dotted variants ("keyword - control", "string - verbatim", "xml doc comment - text", …). A null
+    /// classification (no covering span) is treated as eligible — the identifier-char gate still applies.</summary>
+    private static bool IsDeniedClassification(string? cls)
+    {
+        if (cls is null) return false;
+        return cls.Contains("keyword") || cls.Contains("string") || cls.Contains("comment")
+            || cls.Contains("number") || cls.Contains("operator") || cls.Contains("punctuation")
+            || cls.Contains("excluded") || cls.Contains("whitespace");
+    }
+
+    private static string Ellipsize(string s) => s.Length <= 30 ? s : s.Substring(0, 30) + "…";
+
+    private RoslynColorizer? ColorizerFor(TextEditor editor)
+        => _bindings.TryGetValue(editor, out var b) ? b.Colorizer : null;
+
+    private void OnEditorPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not TextEditor editor || editor.Document is null) return;
+        var point = e.GetCurrentPoint(editor);
+        if (!point.Properties.IsRightButtonPressed) return;
+        var pos = editor.GetPositionFromPoint(point.Position);
+        if (pos is null) return;
+        var offset = editor.Document.GetOffset(pos.Value.Line, pos.Value.Column);
+        // Preserve a selection the user right-clicked inside (so "Search selection" keeps the full phrase);
+        // otherwise move the caret to the clicked token and collapse any stale selection.
+        if (editor.SelectionLength > 0 &&
+            offset >= editor.SelectionStart && offset <= editor.SelectionStart + editor.SelectionLength)
+            return;
+        editor.TextArea.ClearSelection();
+        editor.CaretOffset = offset;
+    }
+
+    private void OnCodeCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (sender is not ContextMenu cm) return;
+        MenuItem? search = null, findUsages = null, goToDef = null;
+        foreach (var item in cm.Items)
+            if (item is MenuItem mi)
+                switch (mi.Name)
+                {
+                    case "CtxSearchItem": search = mi; break;
+                    case "CtxFindUsagesItem": findUsages = mi; break;
+                    case "CtxGoToDefItem": goToDef = mi; break;
+                }
+
+        var editor = FindActiveEditor();
+        var tab = editor?.DataContext as EditorTabViewModel;
+
+        // Search: enabled when a solution is loaded and a term (selection or word) exists.
+        var term = editor is null ? null : TermAt(editor);
+        if (search is not null)
+        {
+            search.IsEnabled = Vm.Solution.SolutionPath is not null && !string.IsNullOrEmpty(term);
+            search.Header = string.IsNullOrEmpty(term) ? "Search solution" : $"Search solution for \"{Ellipsize(term)}\"";
+        }
+
+        // Symbol actions: C# tab, identifier char under the caret, non-denied classification.
+        var symbolEligible = false;
+        if (editor is not null && tab is not null && tab.Mode == HighlightMode.CSharp)
+        {
+            var offset = editor.CaretOffset;
+            var text = editor.Document.Text;
+            if (offset >= 0 && offset < text.Length && IsIdentifierChar(text[offset]))
+                symbolEligible = !IsDeniedClassification(ColorizerFor(editor)?.ClassificationAt(offset));
+        }
+        if (findUsages is not null) findUsages.IsEnabled = symbolEligible;
+        if (goToDef is not null) goToDef.IsEnabled = symbolEligible;
+    }
+
+    private void OnCtxSearchClick(object? sender, RoutedEventArgs e) => TrySearchTermInEditor();
+
+    /// <summary>Searches the solution for the selection (or identifier under the caret) in the active editor,
+    /// then reveals the Find tab. Shared by the "Search solution" context-menu item and the Ctrl+Shift+F
+    /// shortcut. Returns false without side effects when there's no active editor, no term, or no solution —
+    /// letting the keyboard path fall back to simply focusing the Find box.</summary>
+    private bool TrySearchTermInEditor()
+    {
+        var editor = FindActiveEditor();
+        if (editor is null) return false;
+        var term = TermAt(editor);
+        if (string.IsNullOrEmpty(term) || Vm.Solution.SolutionPath is null) return false;
+        Vm.Find.UseRegex = false; // clicked word is a literal query — avoid regex-metacharacter surprises
+        Vm.Find.Query = term;
+        Vm.Find.SearchCommand.Execute(null);
+        FocusFind();
+        return true;
+    }
+
+    // The context-menu caret already sits on the clicked token (OnEditorPointerPressed), so these
+    // resolve against the same offset as the F12 / Shift+F12 shortcuts.
+    private async void OnCtxFindUsagesClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
+
+    private async void OnCtxGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
 }
 
 internal class RoslynColorizer : DocumentColorizingTransformer
@@ -364,6 +535,16 @@ internal class RoslynColorizer : DocumentColorizingTransformer
     }
 
     public void Clear() => _spans = System.Array.Empty<ClassifiedSpan>();
+
+    /// <summary>The classification of the cached span covering <paramref name="offset"/>, or null if none.
+    /// Reads the existing span cache synchronously — no reclassification.</summary>
+    public string? ClassificationAt(int offset)
+    {
+        foreach (var span in _spans)
+            if (offset >= span.TextSpan.Start && offset < span.TextSpan.End)
+                return span.ClassificationType;
+        return null;
+    }
 
     protected override void ColorizeLine(DocumentLine line)
     {

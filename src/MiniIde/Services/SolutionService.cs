@@ -58,7 +58,7 @@ public class SolutionService
         foreach (var sub in Directory.EnumerateDirectories(dir))
         {
             var name = Path.GetFileName(sub);
-            if (name is "bin" or "obj" or ".vs" or ".git") continue;
+            if (IdeDirectories.Pruned.Contains(name)) continue;
             node.Children.Add(BuildFolder(root, sub));
         }
         foreach (var f in Directory.EnumerateFiles(dir))

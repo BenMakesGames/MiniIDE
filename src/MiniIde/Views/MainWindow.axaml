@@ -120,7 +120,15 @@
                                            Foreground="#DCDCDC"
                                            Name="Editor"
                                            AttachedToVisualTree="OnEditorAttached"
-                                           DataContextChanged="OnEditorDataContextChanged"/>
+                                           DataContextChanged="OnEditorDataContextChanged">
+                                <ae:TextEditor.ContextMenu>
+                                    <ContextMenu Opening="OnCodeCtxOpening">
+                                        <MenuItem Name="CtxSearchItem" Header="Search solution" Click="OnCtxSearchClick"/>
+                                        <MenuItem Name="CtxFindUsagesItem" Header="Find usages" Click="OnCtxFindUsagesClick"/>
+                                        <MenuItem Name="CtxGoToDefItem" Header="Go to definition" Click="OnCtxGoToDefClick"/>
+                                    </ContextMenu>
+                                </ae:TextEditor.ContextMenu>
+                            </ae:TextEditor>
                         </DataTemplate>
                         <DataTemplate DataType="vm:ImageTabViewModel">
                             <Grid Background="#1E1E22">

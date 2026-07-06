@@ -130,13 +130,18 @@ public partial class MainWindowViewModel : ViewModelBase
         return result;
     }
 
-    public async Task<System.Collections.Generic.IReadOnlyList<(string, int, int, string)>> FindReferencesAsync(string file, int position)
+    /// <summary>
+    /// Returns reference locations (possibly empty), or <c>null</c> when no symbol resolves at the position.
+    /// The null case sets a "No symbol found" status; callers use it to skip populating results.
+    /// </summary>
+    public async Task<System.Collections.Generic.IReadOnlyList<(string, int, int, string)>?> FindReferencesAsync(string file, int position)
     {
         if (Solution.SolutionPath is null) return System.Array.Empty<(string, int, int, string)>();
         Status = "Loading workspace...";
         await Workspace.EnsureLoadedAsync(Solution.SolutionPath);
         Status = "Finding references...";
         var refs = await Workspace.FindReferencesAsync(file, position);
+        if (refs is null) { Status = "No symbol found"; return null; }
         Status = $"{refs.Count} reference(s)";
         return refs;
     }

@@ -56,19 +56,24 @@ public class WorkspaceService : IDisposable
         return (loc.SourceTree!.FilePath, line.StartLinePosition.Line + 1, line.StartLinePosition.Character + 1);
     }
 
-    public async Task<IReadOnlyList<(string File, int Line, int Column, string Preview)>> FindReferencesAsync(
+    /// <summary>
+    /// Returns the symbol's reference locations (possibly empty when the symbol has zero references),
+    /// or <c>null</c> when no symbol resolves at <paramref name="position"/>. Callers use the null case
+    /// to distinguish a genuine "no symbol here" from a legitimate "symbol found, zero references."
+    /// </summary>
+    public async Task<IReadOnlyList<(string File, int Line, int Column, string Preview)>?> FindReferencesAsync(
         string filePath, int position, CancellationToken ct = default)
     {
         var results = new List<(string, int, int, string)>();
         var doc = FindDocument(filePath);
-        if (doc is null) return results;
+        if (doc is null) return null;
         var model = await doc.GetSemanticModelAsync(ct);
         var root = await doc.GetSyntaxRootAsync(ct);
-        if (model is null || root is null) return results;
+        if (model is null || root is null) return null;
         var token = root.FindToken(position);
         var symbol = model.GetSymbolInfo(token.Parent!, ct).Symbol
             ?? model.GetDeclaredSymbol(token.Parent!, ct);
-        if (symbol is null) return results;
+        if (symbol is null) return null;
         var refs = await SymbolFinder.FindReferencesAsync(symbol, _solution!, ct);
         foreach (var r in refs)
         {

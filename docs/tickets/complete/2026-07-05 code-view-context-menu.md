@@ -108,3 +108,28 @@ Clear the relevant failed-token entries when the document changes, so a fixed ty
 - [ ] With no solution loaded, right-click in any editor — Search is disabled and nothing throws.
 - [ ] Regression: F12, Shift+F12, and Ctrl+Shift+F still behave as before, including Shift+F12 on a non-symbol now reporting "No symbol found."
 - [ ] No exceptions appear in the Output pane throughout.
+
+## Learnings
+
+### Architectural decisions
+- **Deny-list, not allow-list, for symbol-action eligibility** (Constraints / adhoc under-resolves). `IsDeniedClassification(string?)` rejects a classification whose name *contains* `keyword`/`string`/`comment`/`number`/`operator`/`punctuation`/`excluded`/`whitespace`. Substring matching (rather than a `ClassificationTypeNames.X` set) is deliberate: it covers Roslyn's dotted variants in one line (`keyword - control`, `string - verbatim`, `xml doc comment - text`, …). A null classification (no covering span) is treated as *eligible* — the identifier-char gate is the real filter, and the adhoc classifier frequently emits plain `Identifier` (or nothing) for framework/extension members like `Any`.
+- **Failed-token cache = `HashSet<(int Start, int End, string Text, CtxAction Action)>` on `EditorBinding`** (Open Decision #1, span + text). Cleared on the document's `TextChanged` **and** on tab rebind — the single `TextEditor` is recycled across tabs (see `BindEditor`'s `ReferenceEquals(b.CurrentTab, tab)` guard), so a per-editor cache would leak one tab's failures into another with the same offsets. Keying includes `Text` so an edit that shifts offsets can't accidentally match a stale entry even before the clear fires.
+- **Right-click caret placement via a tunneling `PointerPressed`** registered once in `BindEditor` (Impl step 4). Tunnel so it beats AvaloniaEdit's own pointer handling and runs before the menu opens on release. Inside-selection clicks are preserved (`SelectionStart..SelectionStart+SelectionLength`), else `ClearSelection()` + set `CaretOffset` — because `CaretOffset` alone does not collapse a selection, and a stale selection would hijack the Search term.
+- **`WorkspaceService.FindReferencesAsync` now returns `IReadOnlyList<…>?`** — `null` = no symbol at position, empty = symbol with zero refs (Impl step 1). Mirrors `GoToDefinitionAsync`'s existing null-on-no-symbol. Both callers updated: the VM wrapper sets `Status = "No symbol found"` on null; the keyboard `FindRefsAsync()` clears results + sets `"No symbol found"` (this is the one intentional keyboard-path behavior change, called out in the Test Plan). The context handler additionally records the failed token.
+- **Search forces `UseRegex = false`** (Open Decision #3) so a clicked identifier with regex metacharacters can't misbehave. **Header interpolates the term** ellipsized to 30 chars (Open Decision #2/#4) — full term still drives the query.
+- **`PopulateRefs` extracted** to share the results-population between keyboard `FindRefsAsync()` and `OnCtxFindUsagesClick`. Only dedup introduced; no other refactors (scope held).
+
+### Problems encountered / verification
+- **Confirming the AvaloniaEdit API surface offline was the main friction.** `Assembly.LoadFile` + `GetType`/`GetTypes` returned null/empty for both AvaloniaEdit and Avalonia.Controls (dependency load failures swallowed). What worked: (a) ASCII-scanning the DLL bytes for method-name substrings to confirm existence, and (b) `System.Reflection.MetadataLoadContext` with a `PathAssemblyResolver` over the ref assemblies + the running runtime's dir to reflect real signatures. That's how `ContextMenu.Opening`'s type (`System.ComponentModel.CancelEventHandler`) was nailed down.
+- **AvaloniaEdit installs no built-in context menu** — byte-scanning `AvaloniaEdit.dll` found zero occurrences of `ContextRequested`/`ContextMenu`/`set_ContextMenu`, so the "don't clobber a built-in menu" constraint is moot: `TextEditor.ContextMenu` is free real estate.
+
+### Interesting tidbits
+- Named `MenuItem`s inside a `DataTemplate` are **not** in the window namescope, so `FindControl` can't reach them. The `Opening` handler resolves them from `((ContextMenu)sender).Items` by `mi.Name` instead.
+- `TextViewPosition.Line`/`Column` are 1-based and feed `Document.GetOffset(line, col)` directly — same overload already used by `OpenHit`.
+
+### Not verified here (manual Test Plan)
+- The interactive Test Plan (right-click behaviors, enablement across token kinds, retroactive-disable, XML/JSON/no-solution cases) requires driving the GUI and was left to a manual pass. Automated checks done: `dotnet build` clean (one pre-existing `WorkspaceFailed` obsolete warning only), XAML compiles (so all `Click`/`Opening` handler signatures resolved), and the app launches with the solution loaded without a startup crash.
+
+### Rejected alternatives
+- **Allow-list of `*Name` classifications** for eligibility — rejected because the adhoc classifier under-resolves framework members to plain `Identifier`, which an allow-list would wrongly disable (`Any` in `list.Any(...)` must stay enabled for Find usages).
+- **Focusing the Find tab on Find usages** — not done; kept parity with the keyboard Shift+F12 path per Impl step 8 ("exactly as `FindRefsAsync()` does today"). Only Search reveals the Find tab.

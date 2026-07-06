@@ -3,21 +3,21 @@
 ## Context
 **Current behavior**: The top menu bar has a `_Navigate` menu with two items — "Go to _Definition (F12)" and "Find _References (Shift+F12)" — that invoke `GoToDefinitionAsync()` / `FindRefsAsync()` against the current caret. These duplicate the F12 / Shift+F12 keyboard shortcuts (handled globally in `OnGlobalKeyDown`) and, once the code-view context menu ships, the "Go to definition" / "Find usages" items on that menu.
 
-**New behavior**: The `_Navigate` menu is gone; those two actions live only on the code-editor context menu and the keyboard. The context menu's "Find usages" and "Go to definition" items display their keyboard shortcuts (Shift+F12 / F12) as a gesture hint, so removing the menu loses no shortcut discoverability. The menu bar retains only `_File`.
+**New behavior**: The `_Navigate` menu is gone; those two actions live only on the code-editor context menu and the keyboard. The context menu's "Find usages" and "Go to definition" items display their keyboard shortcuts (Shift+F12 / F12) as a gesture hint, so removing the menu loses no shortcut discoverability. `_Navigate` is now the **only** remaining top-menu item (the `_File` menu was removed by `solution-context-menu-actions`), so deleting it empties the `<Menu>` — this ticket must also remove the now-empty `<Menu Grid.Row="0">` element itself.
 
 ## Prerequisites
 - `docs/tickets/code-view-context-menu.md` — must be implemented first. This ticket edits the three-item context menu it adds to the `ae:TextEditor` (Search solution / Find usages / Go to definition).
 
 ## Scope
 ### In scope
-- Delete the `_Navigate` `MenuItem` (both children) from the top `Menu` in `Views/MainWindow.axaml`.
+- Delete the `_Navigate` `MenuItem` (both children) from the top `Menu` in `Views/MainWindow.axaml`, then remove the now-empty `<Menu Grid.Row="0">` element itself (`_File` already gone).
 - Delete the now-unused `OnGoToDefClick` / `OnFindRefsClick` click handlers in `Views/MainWindow.axaml.cs`.
 - Add shortcut-gesture hints to the code context menu's Find usages (Shift+F12) and Go to definition (F12) items.
 
 ### Out of scope
 - Changing the F12 / Shift+F12 / Ctrl+Shift+F keyboard handling in `OnGlobalKeyDown` — unchanged.
 - Removing or renaming `GoToDefinitionAsync()` / `FindRefsAsync()` — still called by the keyboard handlers and the context menu.
-- The `_File` menu and any other context menus (tree, tab-header, solution-name).
+- Any context menus (tree, tab-header, solution-name) — untouched. (The `_File` menu no longer exists; `solution-context-menu-actions` removed it.)
 
 ## Relevant Docs & Anchors
 - **Code anchors**:
@@ -27,7 +27,7 @@
   - `docs/tickets/code-view-context-menu.md` — defines the context menu being edited here.
 
 ## Constraints & Gotchas
-- After deletion the top `Menu` contains a single `_File` item — expected, not a bug.
+- After deleting `_Navigate` the top `<Menu>` has no children — remove the `<Menu Grid.Row="0">` element entirely (Grid rows are `Auto`, so the empty row collapses harmlessly, but the dead element should go).
 - The gesture hint is display-only. F12 / Shift+F12 are already handled in `OnGlobalKeyDown`; do **not** add a `HotKey`/`KeyBinding` that would double-fire or steal the key from the global handler. If using `MenuItem.InputGesture`, confirm it renders the text without also registering an accelerator in this context; if it does register one, prefer the inline-header-text approach (Open Decision #2) instead.
 - Verify `OnGoToDefClick` / `OnFindRefsClick` have no other references before deleting (grep — current usage is only the `_Navigate` XAML).
 
@@ -36,7 +36,7 @@
 2. **Gesture display mechanism** — `MenuItem.InputGesture="F12"` (right-aligned gesture column, idiomatic Avalonia) vs. inline header text like the old Navigate menu (`Go to definition (F12)`). Default: `InputGesture` if it renders cleanly and display-only per Constraints; otherwise inline header text.
 
 ## Acceptance Criteria
-- [ ] The top menu bar shows only `_File`; there is no `_Navigate` menu.
+- [ ] There is no `_Navigate` menu, and the top `<Menu>` element is gone entirely (no empty menu bar; `_File` was already removed).
 - [ ] `OnGoToDefClick` and `OnFindRefsClick` no longer exist in `Views/MainWindow.axaml.cs`, and the project builds.
 - [ ] The code-editor context menu's "Go to definition" item visibly shows the F12 shortcut, and "Find usages" shows Shift+F12.
 - [ ] F12, Shift+F12, and Ctrl+Shift+F still perform Go to Definition, Find References, and Focus Find respectively (unchanged), with no double-firing from the added hints.
@@ -45,7 +45,7 @@
 ## Implementation
 
 ### 1. Remove the Navigate menu
-In `Views/MainWindow.axaml`, delete the entire `<MenuItem Header="_Navigate">…</MenuItem>` block (both child items) from the top `Menu`. Leave the `_File` menu as the sole entry.
+In `Views/MainWindow.axaml`, delete the entire `<MenuItem Header="_Navigate">…</MenuItem>` block (both child items) from the top `Menu`. `_Navigate` is the only child left (`_File` already removed by `solution-context-menu-actions`), so also delete the enclosing empty `<Menu Grid.Row="0">…</Menu>` element.
 
 ### 2. Delete the dead click handlers
 In `Views/MainWindow.axaml.cs`, remove `OnGoToDefClick` and `OnFindRefsClick` (the one-line wrappers). Keep `GoToDefinitionAsync()` / `FindRefsAsync()` — they remain called by `OnGlobalKeyDown` and the context menu handlers.
@@ -56,6 +56,6 @@ On the code-editor `ContextMenu` (in the `EditorTabViewModel` `DataTemplate` in 
 ## Test Plan
 - [ ] `dotnet build src/MiniIde/MiniIde.csproj` succeeds with no new warnings.
 - [ ] Launch via `scripts/run.ps1`, open `MiniIde.slnx`, open a C# file.
-- [ ] The menu bar shows only `File`; there is no `Navigate` menu.
+- [ ] There is no `Navigate` menu and no menu bar at all (the whole `<Menu>` is gone; `File` was already removed).
 - [ ] Right-click an identifier in the editor — the context menu shows "Go to definition" with F12 and "Find usages" with Shift+F12 (and Search with Ctrl+Shift+F if Decision #1 taken). Clicking each still performs its action.
 - [ ] Press F12 on an identifier — navigates to definition; Shift+F12 — populates Find references; Ctrl+Shift+F — focuses Find. None double-fire or throw.

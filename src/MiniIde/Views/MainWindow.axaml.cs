@@ -85,8 +85,6 @@ public partial class MainWindow : Window
     }
 
     private async void OnOpenSolutionClick(object? sender, RoutedEventArgs e) => await OpenSolutionDialogAsync();
-    private async void OnSaveClick(object? sender, RoutedEventArgs e) => await SaveActiveAsync();
-    private void OnExitClick(object? sender, RoutedEventArgs e) => Close();
     private async void OnGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
     private async void OnFindRefsClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
@@ -103,6 +101,52 @@ public partial class MainWindow : Window
         MainWindowViewModel vm => vm.Solution.SolutionPath,
         _ => null
     };
+
+    // Set once wt.exe fails to launch (absent execution alias); subsequent invocations skip straight to
+    // PowerShell for the app's lifetime. Resetting between app runs is fine.
+    private bool _wtUnavailable;
+
+    // With no solution loaded, every solution-scoped item is disabled; only "Open new solution..."
+    // stays live so a solution can be opened from the menu at startup.
+    private void OnSolutionCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (sender is not ContextMenu cm) return;
+        var hasSolution = Vm.Solution.SolutionPath is not null;
+        foreach (var item in cm.Items)
+            if (item is MenuItem mi && mi.Name != "SolutionCtxOpenNew")
+                mi.IsEnabled = hasSolution;
+    }
+
+    private void OnCtxOpenWithClaudeClick(object? sender, RoutedEventArgs e)
+    {
+        var slnPath = Vm.Solution.SolutionPath;
+        var dir = slnPath is null ? null : Path.GetDirectoryName(slnPath);
+        if (dir is null) { Vm.Status = "No solution open"; return; }
+
+        if (!_wtUnavailable)
+        {
+            try
+            {
+                var wt = new ProcessStartInfo { FileName = "wt.exe", UseShellExecute = true };
+                wt.ArgumentList.Add("-d");
+                wt.ArgumentList.Add(dir);
+                wt.ArgumentList.Add("claude");
+                Process.Start(wt);
+                return;
+            }
+            catch (Exception) { _wtUnavailable = true; } // wt not installed — fall through to PowerShell
+        }
+
+        try
+        {
+            var ps = new ProcessStartInfo { FileName = "powershell.exe", WorkingDirectory = dir, UseShellExecute = true };
+            ps.ArgumentList.Add("-NoExit");
+            ps.ArgumentList.Add("-Command");
+            ps.ArgumentList.Add("claude");
+            Process.Start(ps);
+        }
+        catch (Exception ex) { Vm.Status = $"Open with Claude Code failed: {ex.Message}"; }
+    }
 
     private void OnCtxOpenInExplorerClick(object? sender, RoutedEventArgs e)
     {

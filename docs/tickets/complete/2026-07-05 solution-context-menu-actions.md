@@ -82,3 +82,27 @@ Only a launch failure of `wt.exe` itself triggers the fallback and flag — do n
 - [ ] Choose **Open with Claude Code** → a Windows Terminal window opens in the solution folder running `claude` (verify the CWD, e.g. `pwd`). On a machine without `wt.exe`, a PowerShell window opens in the solution folder running `claude` instead, and a second invocation goes straight to PowerShell.
 - [ ] Regression: double-clicking the solution name still opens the `.slnx` in an editor tab; the tree and tab context menus still show their three path items.
 - [ ] No exceptions in the Output pane throughout; **Open with Claude Code** while no solution is loaded does nothing and does not throw.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decision 1 (placeholder mechanism)** — used a field initializer `private string? _solutionName = "<no solution>";` on `MainWindowViewModel`. Confirmed `SolutionName`'s only writer is `OpenSolutionAsync` (`SolutionName = Path.GetFileNameWithoutExtension(path)`), so the placeholder is only ever clobbered by a real load. `SolutionPath` stays `null` until load, so path/Claude actions remain guarded independently of the display string — no XAML `TargetNullValue`/escaping needed.
+- **Open Decision 2 (item placement)** — two new solution-scoped actions at the top (**Open new solution...**, **Open with _Claude Code**), a `Separator`, then the three existing path items. Solution-scoped actions read as primary.
+- **Open Decision 3 (Claude label/mnemonic)** — `Open with _Claude Code` (mnemonic `C`). Within-menu mnemonics are all distinct: n / C / O / a / r. The Open-Solution item was reworded to `Open _new solution...` (mnemonic `n`) to avoid colliding with `_Open in Explorer`'s `O`.
+- **Open Decision 4 (wt flag scope)** — instance field `_wtUnavailable` on `MainWindow` (effectively a singleton). Resets between app runs, which the ticket accepts.
+
+### Implementation notes
+- `OnCtxOpenWithClaudeClick` reads `Vm.Solution.SolutionPath` **directly** (not via `GetTargetPath`) — the menu item's `DataContext` is the `MainWindowViewModel`, and the ticket only needs the solution path, not the polymorphic tree/tab resolution `GetTargetPath` provides.
+- **wt→PowerShell fallback**: `wt.exe` launched with `UseShellExecute = true` and `ArgumentList` `-d <dir> claude`. A `Process.Start` throw (wt is an app-execution alias that may be absent → `Win32Exception`) sets `_wtUnavailable` and falls through to `powershell.exe -NoExit -Command claude` with `WorkingDirectory = <dir>`. Only a *launch* failure of wt trips the flag — `claude` failing inside a spawned terminal is not a wt problem and is never observed by this handler.
+- `UseShellExecute = true` is required here (unlike `RunService`, which uses `false` to pipe output) so the terminal window is actually visible.
+- The `_File` menu removal left the top `<Menu>` holding only `_Navigate`, so the `<Menu>` element stays. Removing the empty `<Menu>` is now owned by `remove-navigate-menu.md` (updated in-place: its stale "retains only `_File`" assertions were corrected to "remove the empty `<Menu>`").
+
+### Verification
+- Isolated `dotnet build` (`-o` to a temp dir) **succeeded** — only the pre-existing `CS0618` (`Workspace.WorkspaceFailed` obsolete) warning; no new warnings, no compile/XAML errors. A normal in-place build fails only at the file-copy step because a running MiniIde instance locks the output DLL — not a compilation error.
+- Acceptance criteria confirmed by code inspection. The manual GUI Test Plan items (menu contents, terminal launch + CWD, wt-absent fallback, no-solution safety, regressions) require driving the running app and are left for manual verification.
+
+### Related areas affected
+- `docs/tickets/remove-navigate-menu.md` — updated to reflect that `_File` is gone and that removing the empty `<Menu>` element is now its responsibility (whichever of the two tickets landed last owns it; this one landed first).
+
+### Post-feedback
+- **Disable, don't silently no-op.** Original design had the four solution-scoped items no-op when `SolutionPath == null`. User feedback: they should be *visibly disabled* — only **Open new solution...** stays live at startup. Added `OnSolutionCtxOpening` (`ContextMenu.Opening`, synchronous — cheap `SolutionPath` null check only) that sets `IsEnabled = SolutionPath is not null` on every `MenuItem` except the one named `SolutionCtxOpenNew`. Mirrors the `OnCodeCtxOpening` idiom (resolve items from `sender`'s `Items`, key off `mi.Name`). The `Separator` is not a `MenuItem`, so it's skipped naturally. The per-handler `SolutionPath == null` guards stay as defense-in-depth.

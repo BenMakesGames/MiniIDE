@@ -144,3 +144,31 @@ Create the shared set (per Open Decision #4, default `Models/IdeDirectories.cs`)
 - [ ] Startup-project ComboBox: `Lib` projects appear disabled; a runnable project is preselected; F5 runs it.
 - [ ] Launch `MiniIde.exe "$(Resolve-Path MiniIde.slnx)"` → solution auto-loads; launch with a bogus/non-solution argument → starts empty, no crash.
 - [ ] Regression: right-click tree/tab/solution-name context menus and path actions still work (untouched, but they read `TreeNode`/`ProjectEntry` which changed internally).
+
+## Learnings
+
+### Architectural decisions
+- **Open Decisions all resolved to their listed defaults** — no reason surfaced to deviate:
+  1. Single `FileKind.Solution` for both `.sln`/`.slnx` with `Highlight = Xml` (cosmetic-only for legacy `.sln`). `ResolveStartupSolution` treats both as one group via `ToFileKind() == FileKind.Solution` — no separate `IsSolution` helper needed.
+  2. Tab-kind is a `bool OpensAsImageTab` on `FileKindInfo` (only two tab types today). Revisit to a `TabKind` enum if a third preview type lands.
+  3. `ToFileKind` takes a bare extension string (nullable) — every caller already holds `Path.GetExtension(...)`, and `Path.GetExtension(string?)` returns `null` for null input, which `ToFileKind(this string?)` maps straight to `Unknown` (preserves the old null-path→Unknown arm in `FileIconMap`).
+  5. Solution glyph reuses `FileIcon.Csproj` / `FileIconPalette.Csproj` (Visual Studio icon) — no dedicated glyph added.
+- **`FileIconMap.From` kept as the NodeKind orchestrator.** Its `File`/`Project` arms now delegate to `FileKind.GetInfo()` / `ProjectKind.GetInfo()` via two private `IconFor` overloads (one per info-record type) that flatten the record to the `(Glyph, Color)` tuple the tree bindings expect. NodeKind logic stayed out of `FileKind`, per the ticket constraint.
+- **`FromProjectKind` deleted outright, not shimmed.** Its only two callers (`FileIconMap.From`, `ProjectEntry`) both moved to `GetInfo()`, so no public surface needed preserving. `ProjectEntry.IconGlyph/IconColor/IsRunnable` stayed non-null public instance members (compiled XAML bindings depend on them) — only their bodies changed to read `Kind.GetInfo()`.
+
+### Interesting tidbits
+- `System.Collections.Frozen` (`FrozenDictionary`/`FrozenSet`) is in the BCL on `net10.0` — no package ref. Built once into `static readonly` fields; enum-keyed dictionaries need no comparer, the extension/dir string collections use `StringComparer.OrdinalIgnoreCase`.
+- **Completeness is the latent-bug surface here**: a `FileKind`/`ProjectKind` member without a dictionary entry is a `KeyNotFoundException` at first icon render, not a compile error. Verified all 11 `FileKind` + 4 `ProjectKind` members have entries; the launch smoke test (loading `MiniIde.slnx` builds the whole tree) would have thrown if any were missing.
+
+### Deliberate reconciliations shipped (not regressions)
+- `.xaml`, `.config`, `.props`, `.targets` now highlight as XML (previously `None` while already showing the XML icon — the icon table and highlight table had drifted).
+- The solution tree now prunes `node_modules` and `packages` (previously shown but never searched — `SolutionService.BuildFolder` and `SearchService` kept two disagreeing skip-lists; now both consult `IdeDirectories.Pruned`).
+
+### Verification notes
+- Build clean (0 errors; the 3 warnings — `WorkspaceService`/`SyntaxHighlightService`/`MainWindow.axaml` — are all pre-existing, unrelated to this change). Launch-with-`.slnx` smoke test passed.
+- Remaining Test-Plan items are visual GUI checks (per-file icon spot-checks, opening `.svg`/`.ico`/`.png`/`.props`, context menus, F5-run) that need a human at the window — not automatable here. The classification data they exercise is a straight port of the pre-change tables plus the two documented reconciliations, so the risk is low.
+- Two pre-existing `CS8019` "unnecessary using" LSP hints (`App.axaml.cs`, `MainWindowViewModel.cs` `using System.Threading`) surfaced due to line-shift/unrelated; left alone (not compiler warnings, out of scope). Removed `using System;` from `App.axaml.cs` and `SearchService.cs` where this change made it genuinely dead.
+
+### Rejected alternatives
+- A single shared info interface across `FileKindInfo`/`ProjectKindInfo` to let `FileIconMap.From` use one `IconFor` helper — rejected; two tiny overloads are simpler than an abstraction for two call sites (KISS).
+- Leaving a `FromProjectKind` public shim "in case bindings need it" — rejected; YAGNI, no caller remained.

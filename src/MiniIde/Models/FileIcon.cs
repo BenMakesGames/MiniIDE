@@ -25,41 +25,29 @@ public static class FileIcon
     public const string Unknown    = "\U000F0224"; // file-outline
 }
 
+// NodeKind-level orchestrator: it maps a tree node to its (glyph, color) by dispatching to the
+// centralized FileKind / ProjectKind classification. The per-extension and per-project-kind tables
+// live in FileKind.cs / ProjectKind.cs — this only decides which classifier a node kind resolves through.
 public static class FileIconMap
 {
     public static (string Glyph, IBrush Color) From(TreeNode node) => node.Kind switch
     {
         NodeKind.Folder   => (FileIcon.Folder, FileIconPalette.Folder),
-        NodeKind.Project  => FromProjectKind(node.ProjectKind ?? Models.ProjectKind.Exe),
-        NodeKind.File     => FromExtension(node.Path),
+        NodeKind.Project  => IconFor(node.ProjectKind ?? Models.ProjectKind.Exe),
+        NodeKind.File     => IconFor(Path.GetExtension(node.Path).ToFileKind()),
         NodeKind.Solution => (FileIcon.Folder, FileIconPalette.Folder),
         _                 => (FileIcon.Unknown, FileIconPalette.Unknown),
     };
 
-    public static (string Glyph, IBrush Color) FromProjectKind(ProjectKind kind) => kind switch
+    private static (string Glyph, IBrush Color) IconFor(FileKind kind)
     {
-        Models.ProjectKind.Exe => (FileIcon.ProjectExe, FileIconPalette.ProjectExe),
-        Models.ProjectKind.Lib => (FileIcon.ProjectLib, FileIconPalette.ProjectLib),
-        Models.ProjectKind.Web => (FileIcon.ProjectWeb, FileIconPalette.ProjectWeb),
-        Models.ProjectKind.Tst => (FileIcon.ProjectTst, FileIconPalette.ProjectTst),
-        _                      => (FileIcon.ProjectExe, FileIconPalette.ProjectExe),
-    };
+        var info = kind.GetInfo();
+        return (info.Glyph, info.Color);
+    }
 
-    private static (string, IBrush) FromExtension(string? path)
+    private static (string Glyph, IBrush Color) IconFor(ProjectKind kind)
     {
-        if (path is null) return (FileIcon.Unknown, FileIconPalette.Unknown);
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext switch
-        {
-            ".cs"                                                                       => (FileIcon.CSharp, FileIconPalette.CSharp),
-            ".json"                                                                     => (FileIcon.Json,   FileIconPalette.Json),
-            ".csproj"                                                                   => (FileIcon.Csproj, FileIconPalette.Csproj),
-            ".xml" or ".axaml" or ".xaml" or ".config" or ".props" or ".targets"        => (FileIcon.Xml,    FileIconPalette.Xml),
-            ".txt" or ".md" or ".editorconfig"                                          => (FileIcon.Text,   FileIconPalette.Text),
-            ".wav" or ".mp3" or ".ogg" or ".flac"                                       => (FileIcon.Audio,  FileIconPalette.Audio),
-            ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp" or ".svg" or ".ico" => (FileIcon.Image,  FileIconPalette.Image),
-            ".mp4" or ".mov" or ".avi" or ".webm" or ".mkv"                             => (FileIcon.Video,  FileIconPalette.Video),
-            _                                                                           => (FileIcon.Unknown, FileIconPalette.Unknown),
-        };
+        var info = kind.GetInfo();
+        return (info.Glyph, info.Color);
     }
 }

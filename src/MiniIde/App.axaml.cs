@@ -2,11 +2,11 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Data.Core;
 using Avalonia.Data.Core.Plugins;
-using System;
 using System.IO;
 using System.Linq;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using MiniIde.Models;
 using MiniIde.ViewModels;
 using MiniIde.Views;
 
@@ -47,10 +47,7 @@ public partial class App : Application
         if (args is null) return null;
         foreach (var arg in args)
         {
-            var ext = Path.GetExtension(arg);
-            var isSolution = ext.Equals(".sln", StringComparison.OrdinalIgnoreCase)
-                || ext.Equals(".slnx", StringComparison.OrdinalIgnoreCase);
-            if (isSolution && File.Exists(arg))
+            if (Path.GetExtension(arg).ToFileKind() == FileKind.Solution && File.Exists(arg))
                 return Path.GetFullPath(arg);
         }
         return null;

@@ -72,7 +72,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private static ProjectEntry? PickDefaultStartup(System.Collections.Generic.IReadOnlyList<ProjectEntry> projects)
     {
-        foreach (var e in projects) if (e.Kind != ProjectKind.Lib) return e;
+        foreach (var e in projects) if (e.IsRunnable) return e;
         return projects.Count > 0 ? projects[0] : null;
     }
 

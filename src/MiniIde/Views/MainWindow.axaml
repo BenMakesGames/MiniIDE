@@ -19,9 +19,10 @@
                     <TextBlock.ContextMenu>
                         <ContextMenu Opening="OnSolutionCtxOpening">
                             <MenuItem Name="SolutionCtxOpenNew" Header="Open _new solution..." Click="OnOpenSolutionClick"/>
-                            <MenuItem Header="Open with _Claude Code" Click="OnCtxOpenWithClaudeClick"/>
                             <Separator/>
+                            <MenuItem Header="Open in _Claude Code" Click="OnCtxOpenWithClaudeClick"/>
                             <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick"/>
+                            <Separator/>
                             <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
                             <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
                         </ContextMenu>
@@ -53,7 +54,7 @@
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <Button Content="▶ Play" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
+                    <Button Content="▶ Run" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
                     <Button Content="■ Stop" Margin="4,0,0,0" Command="{Binding StopCommand}"/>
                 </StackPanel>
             </Grid>

@@ -5,7 +5,7 @@
 - **Language service**: Roslyn (embed direct)
 - **Solution parse**: `Microsoft.VisualStudio.SolutionPersistence` (metadata) + `MSBuildWorkspace` (deferred)
 - **NuGet**: `NuGet.Protocol` + XML edit + shell `dotnet restore`
-- **Global find**: shell `rg`
+- **Global find**: in-process `BenMakesGames.FileGrepper` (managed grep lib)
 
 ## GUI framework decision
 

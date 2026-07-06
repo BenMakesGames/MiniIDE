@@ -85,8 +85,6 @@ public partial class MainWindow : Window
     }
 
     private async void OnOpenSolutionClick(object? sender, RoutedEventArgs e) => await OpenSolutionDialogAsync();
-    private async void OnGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
-    private async void OnFindRefsClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
     private async void OnCloseTabClick(object? sender, RoutedEventArgs e)
     {
@@ -207,7 +205,7 @@ public partial class MainWindow : Window
     private async void OnSolutionNameDoubleTapped(object? sender, TappedEventArgs e)
     {
         var path = Vm.Solution.SolutionPath;
-        if (path is null) return;
+        if (path is null) { await OpenSolutionDialogAsync(); return; }
         await Vm.OpenFileAsync(path);
     }
 

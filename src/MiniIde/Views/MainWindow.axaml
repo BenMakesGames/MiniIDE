@@ -13,13 +13,6 @@
         Icon="/Assets/icon.ico"
         Background="#1E1E22">
     <Grid RowDefinitions="Auto,Auto,*,Auto">
-        <Menu Grid.Row="0" Background="#1E1E22">
-            <MenuItem Header="_Navigate">
-                <MenuItem Header="Go to _Definition (F12)" Click="OnGoToDefClick"/>
-                <MenuItem Header="Find _References (Shift+F12)" Click="OnFindRefsClick"/>
-            </MenuItem>
-        </Menu>
-
         <Border Grid.Row="1" Background="#1E1E22" BorderThickness="0,0,0,1" BorderBrush="#40808080">
             <Grid Margin="8,4" ColumnDefinitions="Auto,*,Auto">
                 <TextBlock Grid.Column="0" Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18" Background="Transparent" DoubleTapped="OnSolutionNameDoubleTapped">
@@ -120,9 +113,9 @@
                                            DataContextChanged="OnEditorDataContextChanged">
                                 <ae:TextEditor.ContextMenu>
                                     <ContextMenu Opening="OnCodeCtxOpening">
-                                        <MenuItem Name="CtxSearchItem" Header="Search solution" Click="OnCtxSearchClick"/>
-                                        <MenuItem Name="CtxFindUsagesItem" Header="Find usages" Click="OnCtxFindUsagesClick"/>
-                                        <MenuItem Name="CtxGoToDefItem" Header="Go to definition" Click="OnCtxGoToDefClick"/>
+                                        <MenuItem Name="CtxSearchItem" Header="Search solution" InputGesture="Ctrl+Shift+F" Click="OnCtxSearchClick"/>
+                                        <MenuItem Name="CtxFindUsagesItem" Header="Find usages" InputGesture="Shift+F12" Click="OnCtxFindUsagesClick"/>
+                                        <MenuItem Name="CtxGoToDefItem" Header="Go to definition" InputGesture="F12" Click="OnCtxGoToDefClick"/>
                                     </ContextMenu>
                                 </ae:TextEditor.ContextMenu>
                             </ae:TextEditor>

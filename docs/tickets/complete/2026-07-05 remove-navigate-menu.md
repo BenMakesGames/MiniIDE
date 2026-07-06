@@ -59,3 +59,15 @@ On the code-editor `ContextMenu` (in the `EditorTabViewModel` `DataTemplate` in 
 - [ ] There is no `Navigate` menu and no menu bar at all (the whole `<Menu>` is gone; `File` was already removed).
 - [ ] Right-click an identifier in the editor — the context menu shows "Go to definition" with F12 and "Find usages" with Shift+F12 (and Search with Ctrl+Shift+F if Decision #1 taken). Clicking each still performs its action.
 - [ ] Press F12 on an identifier — navigates to definition; Shift+F12 — populates Find references; Ctrl+Shift+F — focuses Find. None double-fire or throw.
+
+## Learnings
+
+### Open Decisions resolved
+- **#1 (hint Search)**: Took the default — hinted `Search solution` with `Ctrl+Shift+F`. Avalonia's `InputGesture` renders in its own right-aligned column, independent of the header text, so the dynamically-interpolated header (`Search solution for "Foo"`, set in `OnCodeCtxOpening`) coexists with the gesture hint without layout conflict.
+- **#2 (gesture mechanism)**: Took the default — `MenuItem.InputGesture`. Confirmed display-only: in Avalonia `InputGesture` only populates the gesture text block; `HotKey` is what registers a `KeyBinding`/accelerator. So the hints cannot double-fire against the global `OnGlobalKeyDown` handler, which stays the sole owner of F12 / Shift+F12 / Ctrl+Shift+F. No inline-header fallback needed.
+
+### Architectural notes
+- Deleting `_Navigate` emptied the top `<Menu>`, so the whole `<Menu Grid.Row="0">` element was removed. The `Grid RowDefinitions="Auto,Auto,*,Auto"` was left unchanged — the now-unused first `Auto` row collapses to zero height. Elements kept their original `Grid.Row` indices (Border stays `Grid.Row="1"`), so no re-indexing was needed.
+
+### Verification limits
+- Build compiles the AXAML, which validates that `KeyGesture.Parse` accepts `"F12"`, `"Shift+F12"`, `"Ctrl+Shift+F"`. The visual rendering of the gesture column and the click/keyboard behavior require a running GUI + right-click, which can't be exercised headlessly — left for manual confirmation per the Test Plan.

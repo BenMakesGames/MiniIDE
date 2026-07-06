@@ -61,10 +61,21 @@
 
         <Grid Grid.Row="2" RowDefinitions="*,4,220">
             <Grid Grid.Row="0" ColumnDefinitions="280,4,*">
-                <TreeView Grid.Column="0" Background="#1E1E22" ItemsSource="{Binding Tree}" x:Name="SolutionTree" DoubleTapped="OnTreeDoubleTapped">
+                <TreeView Grid.Column="0" Background="#1E1E22" ItemsSource="{Binding Tree}" x:Name="SolutionTree">
+                    <!-- Stretch the item so its header ContentPresenter fills the full row height. The Fluent
+                         default is VerticalAlignment=Center, which leaves the presenter shorter than the row
+                         (top/bottom dead strips). Horizontal is already Stretch and Padding already 0 in the
+                         Fluent theme, so VerticalAlignment is the only lever needed. Avalonia's TreeViewItem
+                         has no HorizontalContentAlignment/VerticalContentAlignment; the presenter template-binds
+                         HorizontalAlignment/VerticalAlignment instead. -->
+                    <TreeView.ItemContainerTheme>
+                        <ControlTheme TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
+                            <Setter Property="VerticalAlignment" Value="Stretch"/>
+                        </ControlTheme>
+                    </TreeView.ItemContainerTheme>
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate DataType="m:TreeNode" ItemsSource="{Binding Children}">
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" Background="Transparent">
                                 <StackPanel.ContextMenu>
                                     <ContextMenu>
                                         <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick"/>

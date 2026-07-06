@@ -42,6 +42,7 @@ public partial class MainWindow : Window
         };
         KeyDown += OnGlobalKeyDown;
         SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
+        SolutionTree.AddHandler(PointerPressedEvent, OnTreePointerPressed, RoutingStrategies.Tunnel);
     }
 
     private async void OnGlobalKeyDown(object? sender, KeyEventArgs e)
@@ -50,7 +51,7 @@ public partial class MainWindow : Window
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (ctrl && e.Key == Key.O) { e.Handled = true; await OpenSolutionDialogAsync(); }
         else if (ctrl && e.Key == Key.S) { e.Handled = true; await SaveActiveAsync(); }
-        else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; FocusFind(); }
+        else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; if (!TrySearchTermInEditor()) FocusFind(); }
         else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) await Vm.PlayCommand.ExecuteAsync(null); }
         else if (e.Key == Key.F12 && !shift) { e.Handled = true; await GoToDefinitionAsync(); }
         else if (e.Key == Key.F12 && shift) { e.Handled = true; await FindRefsAsync(); }
@@ -182,8 +183,14 @@ public partial class MainWindow : Window
         catch (Exception ex) { Vm.Status = $"Copy failed: {ex.Message}"; }
     }
 
-    private async void OnTreeDoubleTapped(object? sender, TappedEventArgs e)
+    // Open/expand on double-click via PointerPressed + ClickCount == 2 rather than DoubleTapped: the latter
+    // only fires when both presses resolve to the same source element, so it drops near row edges and right
+    // of the text (see docs/avalonia.md). PointerPressed fires wherever the press registers — everywhere
+    // selection already works. Tunnel-registered so it runs before TreeViewItem consumes the press; we must
+    // NOT set e.Handled, or selection would no longer commit on this press.
+    private async void OnTreePointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        if (e.ClickCount != 2) return;
         if (sender is TreeView tv && tv.SelectedItem is TreeNode node)
         {
             if (node.Kind == NodeKind.Project) Services.SolutionServiceExtensions.EnsureExpanded(node);
@@ -488,16 +495,23 @@ public partial class MainWindow : Window
         if (goToDef is not null) goToDef.IsEnabled = symbolEligible;
     }
 
-    private void OnCtxSearchClick(object? sender, RoutedEventArgs e)
+    private void OnCtxSearchClick(object? sender, RoutedEventArgs e) => TrySearchTermInEditor();
+
+    /// <summary>Searches the solution for the selection (or identifier under the caret) in the active editor,
+    /// then reveals the Find tab. Shared by the "Search solution" context-menu item and the Ctrl+Shift+F
+    /// shortcut. Returns false without side effects when there's no active editor, no term, or no solution —
+    /// letting the keyboard path fall back to simply focusing the Find box.</summary>
+    private bool TrySearchTermInEditor()
     {
         var editor = FindActiveEditor();
-        if (editor is null) return;
+        if (editor is null) return false;
         var term = TermAt(editor);
-        if (string.IsNullOrEmpty(term) || Vm.Solution.SolutionPath is null) return;
+        if (string.IsNullOrEmpty(term) || Vm.Solution.SolutionPath is null) return false;
         Vm.Find.UseRegex = false; // clicked word is a literal query — avoid regex-metacharacter surprises
         Vm.Find.Query = term;
         Vm.Find.SearchCommand.Execute(null);
         FocusFind();
+        return true;
     }
 
     // The context-menu caret already sits on the clicked token (OnEditorPointerPressed), so these

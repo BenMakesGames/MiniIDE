@@ -88,3 +88,26 @@ If testing confirms `PointerPressed` + `ClickCount == 2` is the reliable pattern
 - [ ] Single-click various rows (including edges) → selection highlight tracks correctly. Arrow-key up/down → selection moves; `Enter` on a file → opens (regression on `OnTreeKeyDown`).
 - [ ] Regression: horizontal scroll does not jitter on selection (static-ctor class handler still present and effective).
 - [ ] Visual check: row height, indentation, chevron, and selection highlight look unchanged vs. before the container-theme change.
+
+## Learnings
+
+### The container-theme API in the ticket didn't exist on Avalonia 12
+The ticket (Step 2) specified `HorizontalContentAlignment`/`VerticalContentAlignment="Stretch"` setters on `TreeViewItem`. These **do not compile** — `AVLN2000: Unable to resolve suitable regular or attached property`. `TreeViewItem` derives from `HeaderedItemsControl` (→ `ItemsControl`), **not** `ContentControl`, so it has no `*ContentAlignment` properties (that was a WPF-ism in the ticket).
+
+Resolved by reading the real Avalonia 12.0.5 Fluent `TreeViewItem.xaml` template. The header `ContentPresenter` (`PART_HeaderPresenter`) template-binds its `HorizontalAlignment`/`VerticalAlignment` to the **item's own** `HorizontalAlignment`/`VerticalAlignment`, and the default `ControlTheme` sets `VerticalAlignment="Center"` + `Padding="0"`. So the presenter is vertically centered and shorter than the full-height `PART_LayoutRoot` — that centered-presenter-vs-full-row gap is exactly the top/bottom dead strip. The Avalonia-12 lever is therefore `VerticalAlignment="Stretch"` on the item (Horizontal is already `Stretch`, Padding already `0`), set via the `ItemContainerTheme` `BasedOn` the Fluent default. Net effect matches the ticket's *intent* verbatim; only the property name changed.
+
+### The primary fix alone covers the functional criteria
+`PointerPressed` + `ClickCount == 2`, tunnel-registered on the `TreeView`, fires anywhere a press registers — i.e. everywhere single-click selection already works, which is the entire row incl. edges and right-of-text. `ClickCount` proved **not** source-sensitive here (unlike `DoubleTapped`), so the open/expand action is robust on its own. The supporting layer (stretch + transparent `StackPanel` background) is what makes selection/hover *visually* uniform and is belt-and-suspenders insurance; it is not what makes "open" work.
+
+### Node resolution via `SelectedItem` (Open Decision 1)
+Kept `SolutionTree.SelectedItem`. The first press commits selection (item's own bubble handler) before the second press arrives; our tunnel handler on the second press reads the already-committed selection = the right node. No hit-testing of `e.Source` needed.
+
+### Handler must not consume the press (Constraint)
+`OnTreePointerPressed` never sets `e.Handled`. Setting it would swallow the second press's selection commit. First press (`ClickCount == 1`) returns early untouched; only `ClickCount == 2` acts. No double-fire because the old `DoubleTapped` wiring was removed.
+
+### Verification gap
+Build (0 errors) and clean app startup (no runtime `ControlTheme`/`BasedOn` failure) were confirmed programmatically. The physical edge/right-of-text/project/folder double-click checks and the visual regression check are manual UI steps that couldn't be automated from the agent — left for manual confirmation.
+
+### Rejected alternatives
+- **Nested `Style Selector="^ /template/ ContentPresenter#PART_HeaderPresenter"`** to set the presenter's alignment directly — more fragile (hard-codes the `PART_` name and reaches into the template) and unnecessary, since the item's own `VerticalAlignment` already flows to the presenter via the existing `TemplateBinding`.
+- **Zeroing `TreeViewItem.Padding`** (Open Decision 3) — not needed; Fluent already defaults it to `0`.

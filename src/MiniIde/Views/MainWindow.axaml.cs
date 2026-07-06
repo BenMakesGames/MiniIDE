@@ -16,7 +16,6 @@ using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Rendering;
-using CommunityToolkit.Mvvm.Input;
 using Microsoft.CodeAnalysis.Classification;
 using MiniIde.Models;
 using MiniIde.ViewModels;
@@ -34,18 +33,9 @@ public partial class MainWindow : Window
 
     private MainWindowViewModel Vm => (MainWindowViewModel)DataContext!;
 
-    public IRelayCommand OpenSolutionDialogCommand { get; }
-    public IRelayCommand SaveActiveCommand { get; }
-    public IRelayCommand GoToDefinitionCommand { get; }
-    public IRelayCommand FindRefsCommand { get; }
-
     public MainWindow()
     {
         InitializeComponent();
-        OpenSolutionDialogCommand = new RelayCommand(async () => await OpenSolutionDialogAsync());
-        SaveActiveCommand = new RelayCommand(async () => await SaveActiveAsync());
-        GoToDefinitionCommand = new RelayCommand(async () => await GoToDefinitionAsync());
-        FindRefsCommand = new RelayCommand(async () => await FindRefsAsync());
         DataContextChanged += (_, _) =>
         {
             if (Vm is not null) Vm.RequestOpen += OpenHit;
@@ -299,13 +289,8 @@ public partial class MainWindow : Window
         b.CurrentTab = tab;
         b.CurrentDoc = tab.Document;
         editor.Document = tab.Document;
-        b.Failed.Clear(); // this editor is recycled across tabs; failed-token cache is per-document
 
-        b.TextChangedHandler = async (_, _) =>
-        {
-            b.Failed.Clear(); // an edit may fix a typo / add a using, re-enabling retroactively-disabled items
-            await RefreshAndRedraw(b.Colorizer!, editor, tab.Mode);
-        };
+        b.TextChangedHandler = async (_, _) => await RefreshAndRedraw(b.Colorizer!, editor, tab.Mode);
         tab.Document.TextChanged += b.TextChangedHandler;
 
         _ = RefreshAndRedraw(b.Colorizer!, editor, tab.Mode);
@@ -341,9 +326,6 @@ public partial class MainWindow : Window
         public AvaloniaEdit.Document.TextDocument? CurrentDoc;
         public RoslynColorizer? Colorizer;
         public EventHandler? TextChangedHandler;
-        // Tokens whose symbol action was attempted and proved impossible (keyed by identifier run + action).
-        // Consulted during menu enablement; cleared on document edit / tab switch.
-        public readonly HashSet<(int Start, int End, string Text, CtxAction Action)> Failed = new();
     }
 
     private void FocusFind()
@@ -410,8 +392,6 @@ public partial class MainWindow : Window
 
     // ── Code-editor context menu (Search / Find usages / Go to definition) ──
 
-    private enum CtxAction { FindUsages, GoToDef }
-
     private static bool IsIdentifierChar(char c) => c == '_' || char.IsLetterOrDigit(c);
 
     /// <summary>The [start, end) of the identifier run covering <paramref name="offset"/>, or an empty
@@ -454,24 +434,6 @@ public partial class MainWindow : Window
     private RoslynColorizer? ColorizerFor(TextEditor editor)
         => _bindings.TryGetValue(editor, out var b) ? b.Colorizer : null;
 
-    private void RecordFailed(TextEditor editor, int offset, CtxAction action)
-    {
-        if (!_bindings.TryGetValue(editor, out var b)) return;
-        var text = editor.Document.Text;
-        var (start, end) = IdentifierRunAt(text, offset);
-        if (end <= start) return;
-        b.Failed.Add((start, end, text.Substring(start, end - start), action));
-    }
-
-    private bool IsFailed(TextEditor editor, int offset, CtxAction action)
-    {
-        if (!_bindings.TryGetValue(editor, out var b)) return false;
-        var text = editor.Document.Text;
-        var (start, end) = IdentifierRunAt(text, offset);
-        if (end <= start) return false;
-        return b.Failed.Contains((start, end, text.Substring(start, end - start), action));
-    }
-
     private void OnEditorPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not TextEditor editor || editor.Document is null) return;
@@ -513,20 +475,17 @@ public partial class MainWindow : Window
             search.Header = string.IsNullOrEmpty(term) ? "Search solution" : $"Search solution for \"{Ellipsize(term)}\"";
         }
 
-        // Symbol actions: C# tab, identifier char under the caret, non-denied classification, not failed.
-        var baseEligible = false;
-        var offset = 0;
+        // Symbol actions: C# tab, identifier char under the caret, non-denied classification.
+        var symbolEligible = false;
         if (editor is not null && tab is not null && tab.Mode == HighlightMode.CSharp)
         {
-            offset = editor.CaretOffset;
+            var offset = editor.CaretOffset;
             var text = editor.Document.Text;
             if (offset >= 0 && offset < text.Length && IsIdentifierChar(text[offset]))
-                baseEligible = !IsDeniedClassification(ColorizerFor(editor)?.ClassificationAt(offset));
+                symbolEligible = !IsDeniedClassification(ColorizerFor(editor)?.ClassificationAt(offset));
         }
-        if (findUsages is not null)
-            findUsages.IsEnabled = baseEligible && editor is not null && !IsFailed(editor, offset, CtxAction.FindUsages);
-        if (goToDef is not null)
-            goToDef.IsEnabled = baseEligible && editor is not null && !IsFailed(editor, offset, CtxAction.GoToDef);
+        if (findUsages is not null) findUsages.IsEnabled = symbolEligible;
+        if (goToDef is not null) goToDef.IsEnabled = symbolEligible;
     }
 
     private void OnCtxSearchClick(object? sender, RoutedEventArgs e)
@@ -541,35 +500,11 @@ public partial class MainWindow : Window
         FocusFind();
     }
 
-    private async void OnCtxFindUsagesClick(object? sender, RoutedEventArgs e)
-    {
-        var editor = FindActiveEditor();
-        if (editor is null || Vm.ActiveTab is null) return;
-        var offset = editor.CaretOffset;
-        var refs = await Vm.FindReferencesAsync(Vm.ActiveTab.FilePath, offset);
-        if (refs is null) // no symbol resolved — record so the item disables on reopen at this token
-        {
-            RecordFailed(editor, offset, CtxAction.FindUsages);
-            Vm.Find.Results.Clear();
-            Vm.Find.Status = "No symbol found";
-            return;
-        }
-        PopulateRefs(refs); // a resolved symbol with zero references is a legitimate result, not a failure
-    }
+    // The context-menu caret already sits on the clicked token (OnEditorPointerPressed), so these
+    // resolve against the same offset as the F12 / Shift+F12 shortcuts.
+    private async void OnCtxFindUsagesClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
-    private async void OnCtxGoToDefClick(object? sender, RoutedEventArgs e)
-    {
-        var editor = FindActiveEditor();
-        if (editor is null || Vm.ActiveTab is null) return;
-        var offset = editor.CaretOffset;
-        var result = await Vm.GoToDefinitionAsync(Vm.ActiveTab.FilePath, offset);
-        if (result is null) // no symbol, or no in-source definition (framework symbol) — the VM set the status
-        {
-            RecordFailed(editor, offset, CtxAction.GoToDef);
-            return;
-        }
-        await OpenHit(result.Value.Item1, result.Value.Item2, result.Value.Item3);
-    }
+    private async void OnCtxGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
 }
 
 internal class RoslynColorizer : DocumentColorizingTransformer

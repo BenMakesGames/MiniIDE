@@ -52,7 +52,7 @@ public partial class MainWindow : Window
         if (ctrl && e.Key == Key.O) { e.Handled = true; await OpenSolutionDialogAsync(); }
         else if (ctrl && e.Key == Key.S) { e.Handled = true; await SaveActiveAsync(); }
         else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; if (!TrySearchTermInEditor()) FocusFind(); }
-        else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) await Vm.PlayCommand.ExecuteAsync(null); }
+        else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) { ShowOutput(); await Vm.PlayCommand.ExecuteAsync(null); } }
         else if (e.Key == Key.F12 && !shift) { e.Handled = true; await GoToDefinitionAsync(); }
         else if (e.Key == Key.F12 && shift) { e.Handled = true; await FindRefsAsync(); }
     }
@@ -76,6 +76,13 @@ public partial class MainWindow : Window
     }
 
     private async void OnOpenSolutionClick(object? sender, RoutedEventArgs e) => await OpenSolutionDialogAsync();
+
+    private async void OnReloadSolutionClick(object? sender, RoutedEventArgs e)
+    {
+        var path = Vm.Solution.SolutionPath;
+        if (path is null) { Vm.Status = "No solution open"; return; }
+        await Vm.OpenSolutionCommand.ExecuteAsync(path);
+    }
 
     private async void OnCloseTabClick(object? sender, RoutedEventArgs e)
     {
@@ -351,6 +358,20 @@ public partial class MainWindow : Window
         }, DispatcherPriority.Background);
     }
 
+    // Brings the Output tab to the foreground so streamed build/run output is visible. Shared by the Run
+    // button click and the F5 shortcut. Mirrors FocusFind but simpler — Output has no input box to focus.
+    private void ShowOutput()
+    {
+        var tabs = this.FindControl<TabControl>("BottomTabs");
+        var outputTab = this.FindControl<TabItem>("OutputTab");
+        if (tabs is not null && outputTab is not null)
+            tabs.SelectedItem = outputTab;
+    }
+
+    // Click fires alongside the PlayCommand binding but not while the button is disabled (CanPlay false),
+    // so the tab only switches when there's actually something to run.
+    private void OnRunClick(object? sender, RoutedEventArgs e) => ShowOutput();
+
     private async Task OpenSolutionDialogAsync()
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
@@ -364,7 +385,25 @@ public partial class MainWindow : Window
         });
         var path = files.FirstOrDefault()?.TryGetLocalPath();
         if (path is null) return;
+
+        // A solution is already open — launch a new MiniIDE instance for the selection
+        // rather than replacing the current one, so both stay open side by side.
+        if (Vm.Solution.SolutionPath is not null) { LaunchNewInstance(path); return; }
+
         await Vm.OpenSolutionCommand.ExecuteAsync(path);
+    }
+
+    private void LaunchNewInstance(string solutionPath)
+    {
+        var exe = Environment.ProcessPath;
+        if (exe is null) { Vm.Status = "Could not locate the MiniIDE executable"; return; }
+        try
+        {
+            var psi = new ProcessStartInfo { FileName = exe, UseShellExecute = false };
+            psi.ArgumentList.Add(solutionPath);
+            Process.Start(psi);
+        }
+        catch (Exception ex) { Vm.Status = $"Open new solution failed: {ex.Message}"; }
     }
 
     private async Task SaveActiveAsync()

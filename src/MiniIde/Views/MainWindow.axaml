@@ -9,7 +9,7 @@
         Width="1200" Height="800"
         x:Class="MiniIde.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="MiniIde"
+        Title="{Binding WindowTitle}"
         Icon="/Assets/icon.ico"
         Background="#1E1E22">
     <Grid RowDefinitions="Auto,Auto,*,Auto">
@@ -19,6 +19,7 @@
                     <TextBlock.ContextMenu>
                         <ContextMenu Opening="OnSolutionCtxOpening">
                             <MenuItem Name="SolutionCtxOpenNew" Header="Open _new solution..." Click="OnOpenSolutionClick"/>
+                            <MenuItem Header="_Reload solution" Click="OnReloadSolutionClick"/>
                             <Separator/>
                             <MenuItem Header="Open in _Claude Code" Click="OnCtxOpenWithClaudeClick"/>
                             <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick"/>
@@ -54,7 +55,7 @@
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <Button Content="▶ Run" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
+                    <Button Content="▶ Run" Margin="8,0,0,0" Command="{Binding PlayCommand}" Click="OnRunClick"/>
                     <Button Content="■ Stop" Margin="4,0,0,0" Command="{Binding StopCommand}"/>
                 </StackPanel>
             </Grid>
@@ -176,7 +177,7 @@
                         </Grid>
                     </TabItem>
 
-                    <TabItem Header="Output">
+                    <TabItem Header="Output" x:Name="OutputTab">
                         <ae:TextEditor Name="OutputEditor"
                                        IsReadOnly="True"
                                        ShowLineNumbers="False"

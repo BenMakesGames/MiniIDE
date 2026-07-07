@@ -31,7 +31,9 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private TabViewModelBase? _activeTab;
     [ObservableProperty] private string _status = "Ready";
     [ObservableProperty] private ProjectEntry? _startupProject;
-    [ObservableProperty] private string? _solutionName = "<no solution>";
+    [ObservableProperty][NotifyPropertyChangedFor(nameof(WindowTitle))] private string? _solutionName = "<no solution>";
+
+    public string WindowTitle => Solution.SolutionPath is null ? "MiniIDE" : $"{SolutionName} - MiniIDE";
 
     public event Func<string, int, int, Task>? RequestOpen;
 

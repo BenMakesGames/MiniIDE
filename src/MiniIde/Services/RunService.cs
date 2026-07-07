@@ -25,8 +25,17 @@ public class RunService
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add(verb);
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(entry.Path);
+        // VSTest `dotnet test` takes the project path positionally and rejects --project (MSB1001);
+        // `dotnet run` requires --project. See docs/tickets/complete for the fix-dotnet-test-invocation ticket.
+        if (entry.Kind == ProjectKind.Tst)
+        {
+            psi.ArgumentList.Add(entry.Path);
+        }
+        else
+        {
+            psi.ArgumentList.Add("--project");
+            psi.ArgumentList.Add(entry.Path);
+        }
         _current = Process.Start(psi)!;
         _current.OutputDataReceived += (_, e) => { if (e.Data is not null) log(e.Data); };
         _current.ErrorDataReceived += (_, e) => { if (e.Data is not null) log("[err] " + e.Data); };

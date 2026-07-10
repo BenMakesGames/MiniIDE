@@ -234,6 +234,49 @@
                             </DockPanel>
                         </Grid>
                     </TabItem>
+
+                    <TabItem Header="Problems" x:Name="ProblemsTab">
+                        <Grid RowDefinitions="Auto,*" DataContext="{Binding Problems}">
+                            <DockPanel Grid.Row="0" Margin="4">
+                                <Button DockPanel.Dock="Left" Content="Refresh" Command="{Binding RefreshCommand}"/>
+                                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                                    <RadioButton GroupName="ProblemGrouping" Content="By file" IsChecked="{Binding IsByFile, Mode=TwoWay}"/>
+                                    <RadioButton GroupName="ProblemGrouping" Content="By code" IsChecked="{Binding IsByCode, Mode=TwoWay}" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding Status}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                            </DockPanel>
+                            <Grid Grid.Row="1">
+                                <TreeView Background="#000000" ItemsSource="{Binding Groups}"
+                                          x:Name="ProblemsTree"
+                                          AttachedToVisualTree="OnProblemsTreeAttached">
+                                    <TreeView.ItemContainerTheme>
+                                        <ControlTheme TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
+                                            <Setter Property="VerticalAlignment" Value="Stretch"/>
+                                        </ControlTheme>
+                                    </TreeView.ItemContainerTheme>
+                                    <TreeView.DataTemplates>
+                                        <TreeDataTemplate DataType="vm:ProblemGroup" ItemsSource="{Binding Children}">
+                                            <TextBlock Text="{Binding Header}" VerticalAlignment="Center"/>
+                                        </TreeDataTemplate>
+                                        <DataTemplate DataType="vm:ProblemLeaf">
+                                            <StackPanel Orientation="Horizontal" Background="Transparent">
+                                                <TextBlock Text="{Binding Glyph}"
+                                                           Foreground="{Binding IconColor}"
+                                                           Margin="0,0,6,0"
+                                                           VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Display}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </TreeView.DataTemplates>
+                                </TreeView>
+                                <TextBlock Text="{Binding Placeholder}"
+                                           Foreground="#808080"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           IsHitTestVisible="False"
+                                           IsVisible="{Binding ShowPlaceholder}"/>
+                            </Grid>
+                        </Grid>
+                    </TabItem>
                 </TabControl>
         </Grid>
 

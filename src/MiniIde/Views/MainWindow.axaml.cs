@@ -208,6 +208,24 @@ public partial class MainWindow : Window
         }
     }
 
+    // Wire double-click navigation once the Problems tree is realized (it lives inside a bottom TabItem, so
+    // it isn't in the visual tree at ctor time). Same tunnel PointerPressed + ClickCount==2 approach as the
+    // solution tree — DoubleTapped drops presses near row edges (see docs/avalonia.md).
+    private bool _problemsTreeHooked;
+    private void OnProblemsTreeAttached(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (_problemsTreeHooked || sender is not TreeView tv) return;
+        _problemsTreeHooked = true;
+        tv.AddHandler(PointerPressedEvent, OnProblemsPointerPressed, RoutingStrategies.Tunnel);
+    }
+
+    private void OnProblemsPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        if (sender is TreeView tv && tv.SelectedItem is ProblemLeaf leaf)
+            Vm.Problems.Activate(leaf);
+    }
+
     private async void OnSolutionNameDoubleTapped(object? sender, TappedEventArgs e)
     {
         var path = Vm.Solution.SolutionPath;

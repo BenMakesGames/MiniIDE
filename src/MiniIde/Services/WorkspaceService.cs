@@ -89,6 +89,48 @@ public class WorkspaceService : IDisposable
         return results;
     }
 
+    /// <summary>
+    /// Compiles every project in the loaded solution and returns its Error + Warning compiler diagnostics as
+    /// <see cref="ProblemItem"/>s. Info/Hidden and pragma-suppressed diagnostics are excluded; duplicates
+    /// (same id+file+line+column+message, e.g. from a multi-targeted project's per-TFM compilations) are
+    /// collapsed. Returns empty when no solution is loaded. Compilation is the expensive step and may be slow
+    /// on a first, cold load — it runs off the UI thread, honors <paramref name="ct"/> between projects, and
+    /// reports per-project progress via the <see cref="Progress"/> event.
+    /// </summary>
+    public async Task<IReadOnlyList<ProblemItem>> GetDiagnosticsAsync(CancellationToken ct = default)
+    {
+        if (_solution is null) return System.Array.Empty<ProblemItem>();
+        var results = new List<ProblemItem>();
+        var seen = new HashSet<string>();
+        foreach (var project in _solution.Projects)
+        {
+            ct.ThrowIfCancellationRequested();
+            Progress?.Invoke($"Analyzing {project.Name}");
+            var compilation = await project.GetCompilationAsync(ct);
+            if (compilation is null) continue;
+            foreach (var diag in compilation.GetDiagnostics(ct))
+            {
+                if (diag.IsSuppressed) continue;
+                if (diag.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
+
+                var severity = diag.Severity == DiagnosticSeverity.Error ? ProblemSeverity.Error : ProblemSeverity.Warning;
+                string? file = null;
+                int line = 0, column = 0;
+                if (diag.Location.IsInSource)
+                {
+                    var span = diag.Location.GetLineSpan();
+                    file = diag.Location.SourceTree!.FilePath;
+                    line = span.StartLinePosition.Line + 1;
+                    column = span.StartLinePosition.Character + 1;
+                }
+                var message = diag.GetMessage();
+                if (!seen.Add($"{diag.Id}|{file}|{line}|{column}|{message}")) continue;
+                results.Add(new ProblemItem(diag.Id, severity, message, file, line, column));
+            }
+        }
+        return results;
+    }
+
     public void UpdateDocumentText(string filePath, string text)
     {
         if (_solution is null || _ws is null) return;

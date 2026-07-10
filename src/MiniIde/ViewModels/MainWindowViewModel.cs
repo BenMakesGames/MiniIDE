@@ -22,6 +22,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public OutputViewModel Output { get; } = new();
     public FindResultsViewModel Find { get; }
+    public ProblemsViewModel Problems { get; }
     public NuGetViewModel NuGetVm { get; }
 
     public ObservableCollection<TreeNode> Tree { get; } = new();
@@ -50,6 +51,10 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             if (RequestOpen is not null) await RequestOpen(f, l, c);
         });
+        Problems = new ProblemsViewModel(Workspace, Solution, async (f, l, c) =>
+        {
+            if (RequestOpen is not null) await RequestOpen(f, l, c);
+        });
         NuGetVm = new NuGetViewModel(NuGet, Output);
     }
 
@@ -67,6 +72,7 @@ public partial class MainWindowViewModel : ViewModelBase
             NuGetVm.SetProjects(Solution.Projects);
             StartupProject = PickDefaultStartup(Solution.Projects);
             SolutionName = Path.GetFileNameWithoutExtension(path);
+            Problems.NotifyCanRefreshChanged();
             Status = $"Loaded {Path.GetFileName(path)} ({Solution.Projects.Count} projects)";
         }
         catch (Exception ex) { Status = ex.Message; }

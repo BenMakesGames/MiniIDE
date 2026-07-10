@@ -75,3 +75,29 @@ Launch, open `MiniIde.slnx`, and tune the three hexes (Open Decision 2) against 
 - [ ] With no solution loaded, right-click the `<no solution>` label — the menu opens; *Open new solution…* is enabled, the rest greyed. Confirm the disabled icons look acceptable (or are dimmed if Open Decision 3 was taken).
 - [ ] No glyph renders as a blank box / tofu (would indicate a wrong codepoint or font-family suffix).
 - [ ] No exceptions in the Output pane while opening the menus.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decision 1 (Explorer glyph)**: `folder` per default — codepoint reused from the proven `FileIcon.Folder` (`\U000F024B`). No `folder-open`.
+- **Open Decision 2 (colors)**: inline `Foreground` on each icon `TextBlock` (three icons — not worth a color set). Shipped the starter hexes unchanged after the visual pass: refresh green `#3FB950`, robot blue `#569CD6`, folder yellow `#E8C547`. All read cleanly on the `#1E1E22` menu background.
+- **Open Decision 3 (disabled dimming)**: taken. User found bright icons on greyed items jarring, so added a scoped `MenuItem:disabled → Opacity=0.4` style inside the solution `ContextMenu.Styles`. Only the solution menu needs it — the tree-node and tab *Open in Explorer* items are never disabled. `0.4` matches the existing `ComboBoxItem:disabled` precedent from the project-kind-icons ticket.
+- **Open Decision 4 (constant naming)**: action-named (`Reload` / `Claude` / `Explorer`) per default, so the use site reads by intent rather than by glyph shape.
+- **`ActionIcon` kept separate from `FileIcon`**: `FileIcon.cs`'s header scopes it to file-type tree glyphs; menu-action glyphs live in the new `Models/ActionIcon.cs` with the same 6.8.96 / below-BMP header. `Explorer` intentionally duplicates the folder codepoint rather than cross-referencing `FileIcon.Folder` — keeps the two glyph tables independent.
+
+### Problems encountered
+- **Explicit `Foreground` defeats disabled dimming** (same hazard the project-kind-icons ticket hit on the ComboBox): a `TextBlock` with a hard-coded brush keeps full color while the `MenuItem` text greys. Confirmed here and fixed with the item-level `:disabled` opacity style — dims icon + text together, no per-child binding.
+- **File-lock on relaunch (MSB3021)**: `scripts/run.ps1` doesn't kill a running instance, so rebuilding over a live `MiniIde.exe` fails. `Get-Process MiniIde | Stop-Process -Force` before each `run.ps1` during the visual pass.
+
+### Interesting tidbits
+- **Codepoints verified against MDI 6.8.96**: `refresh` = F0450, `robot` = F06A9, `folder` = F024B. No repo-local `cheatsheet.html`; verified `refresh`/`robot` via pictogrammers.com per-icon pages. Both are old, stable glyphs — not renumbered on the 6.x line.
+- **`x:Static`, not binding**: the solution-menu items' `DataContext` is `MainWindowViewModel` and the tree/tab items' is a node/tab — none carry the glyph. `{x:Static m:ActionIcon.Xxx}` sidesteps `DataContext` entirely, so the same static reference works in all three menus. `xmlns:m="using:MiniIde.Models"` was already declared on the root.
+- **Icon gutter is menu-wide**: once one item has an `Icon`, Avalonia reserves the icon column for every sibling, so *Copy path* / *Open new solution…* render with a blank-but-indented gutter. Intended, not a regression.
+
+### Related areas affected
+- `Views/MainWindow.axaml` — three `ContextMenu` blocks touched (solution, tree-node, tab-header); the three *Open in Explorer* items now share one glyph/color. The duplicated blocks stayed inline (out of scope to consolidate).
+
+### Rejected alternatives
+- **`folder-open` for Explorer** — rejected per Open Decision 1; `folder` reuses a proven codepoint and matches the tree's folder icon.
+- **Accepting bright disabled icons** (Open Decision 3 default) — rejected after the visual pass; user preferred the dimmed look.
+- **A shared color/resource for the three icons** — inline `Foreground` is fine at three icons; a resource set would be premature (YAGNI).

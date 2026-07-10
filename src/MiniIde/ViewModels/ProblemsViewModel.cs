@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MiniIde.Models;
@@ -61,6 +62,11 @@ public partial class ProblemsViewModel : ViewModelBase
         var ct = cts.Token;
         IsBusy = true;
         Status = "Analyzing...";
+        // Surface per-project progress in this panel's own status bar for the duration of the run only —
+        // Workspace.Progress fires on a background thread, and scoping the subscription keeps unrelated
+        // workspace loads (go-to-def, find-refs) from writing over the results summary.
+        void OnProgress(string m) => Dispatcher.UIThread.Post(() => { if (ReferenceEquals(_cts, cts)) Status = m; });
+        _workspace.Progress += OnProgress;
         try
         {
             await _workspace.EnsureLoadedAsync(_sln.SolutionPath, ct);
@@ -71,13 +77,13 @@ public partial class ProblemsViewModel : ViewModelBase
             WarningCount = diagnostics.Count(d => d.Severity == ProblemSeverity.Warning);
             RebuildTree();
             Placeholder = "No problems found.";
-            Status = $"{ErrorCount} error(s), {WarningCount} warning(s)";
+            Status = $"{Count(ErrorCount, "error")}, {Count(WarningCount, "warning")}";
         }
         // Only the current run may touch shared state — a superseded run (its _cts already replaced by a newer
         // refresh) must stay silent so it can't reset IsBusy or clobber the newer run's status.
         catch (OperationCanceledException) { if (ReferenceEquals(_cts, cts)) Status = "Canceled"; }
         catch (Exception ex) { if (ReferenceEquals(_cts, cts)) Status = ex.Message; }
-        finally { if (ReferenceEquals(_cts, cts)) IsBusy = false; }
+        finally { _workspace.Progress -= OnProgress; if (ReferenceEquals(_cts, cts)) IsBusy = false; }
     }
 
     /// <summary>Activates a leaf via the injected open-callback. No-op for locationless diagnostics.</summary>
@@ -142,6 +148,9 @@ public partial class ProblemsViewModel : ViewModelBase
     // By-code leaf: parent shows the code, so lead with the file:line where it occurred.
     private string ByCodeDisplay(ProblemItem p) =>
         p.HasLocation ? $"{Rel(p.File!)}({p.Line},{p.Column}): {p.Message}" : $"(no file): {p.Message}";
+
+    // "1 error", "0 errors", "3 warnings" — no parenthetical "(s)".
+    private static string Count(int n, string noun) => $"{n} {noun}{(n == 1 ? "" : "s")}";
 
     private string Rel(string file)
     {

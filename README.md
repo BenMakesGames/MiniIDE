@@ -1,6 +1,6 @@
 **tl;dr:** this is an experimental C# IDE, intended to be used alongside an external agentic AI that runs in its own thang (such as Claude Code's TUI (flawed though it may be)).
 
-> [🧚 **Hey, listen!** You can support my development of open-source software on Patreon](https://www.patreon.com/BenMakesGames)
+> 🧚 **hey, listen!** [you can support my development of open-source software on Patreon](https://www.patreon.com/BenMakesGames), and/or [check out my game Astromino, on Steam!](https://store.steampowered.com/app/4644350/Astromino/)
 
 ### why?
 
@@ -8,7 +8,7 @@ I love Rider - it's been my favorite C# IDE for years - but like all IDEs, it's 
 
 but of all the features Rider offers, I've only used very few; with agentic AIs, I use fewer still.
 
-(I've tried vscode various times over the years: its UI/UX is simply not to my liking, and their C# support has always been lacking (they only _recently_ got solution support?? 'the heck?!?))
+(I've tried vscode various times over the years: its UI/UX is simply not to my liking, and their C# support has always been lacking (they only _recently_ got solution support?? 'the heck?!?), _and_ it's an electron app?! that's extra weight++!)
 
 so, like any ridiculous dev, I've decided to "just" make my own...
 
@@ -18,18 +18,24 @@ so, like any ridiculous dev, I've decided to "just" make my own...
 
 ultimately: to reach a point where I'm comfortable uninstalling Rider.
 
-1. syntax highlighting, including highlighting warnings & errors
-2. jump to declaration
-3. find usages
-4. global search w/ regex if you want it
-5. show all warnings & errors
-6. NuGet package management
-7. a decent-ish & modern-ish look & feel
+| feature                                | status                  |
+| -------------------------------------- | ----------------------- |
+| syntax highlighting (C#, JSON, XML)    | ✅                       |
+| highlighting warnings & errors         | ❌                       |
+| jump to declaration                    | ✔ - could use a UI pass |
+| find usages                            | ✔ - could use a UI pass |
+| global search, w/ regex if you want it | ✔ - could use a UI pass |
+| show all warnings & errors             | ❌                       |
+| NuGet package management               | ✔ - could use a UI pass |
+| a decent-ish & modern-ish look & feel  | ✅                       |
 
 ### my nice-to-haves
 
-1. git integration
-2. navigate interface implementations & inheritance trees
+| feature                                                | status |
+| ------------------------------------------------------ | ------ |
+| git integration?                                       | ❌      |
+| navigate interface implementations & inheritance trees | ❌      |
+| nice test result UI (not just console output)          | ❌      |
 
 ### my GTFOs
 

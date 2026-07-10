@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Enumeration;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -15,6 +16,10 @@ public sealed class FileGrepper
 {
     // Binary sniff: most binary files fail on byte 0–4, so a small prefix is plenty.
     private const int BinarySniffBytes = 8192;
+
+    // Stateless and reusable — one shared instance instead of one per scanned file.
+    private static readonly UTF8Encoding Utf8Strict =
+        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     public async IAsyncEnumerable<GrepHit> GrepAsync(
         string rootPath, string pattern, GrepOptions options,
@@ -93,8 +98,7 @@ public sealed class FileGrepper
             stream.Seek(0, SeekOrigin.Begin);
 
             // Throwing decoder → non-UTF-8 files fault mid-read and get skipped silently.
-            var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-            using var reader = new StreamReader(stream, utf8, detectEncodingFromByteOrderMarks: true);
+            using var reader = new StreamReader(stream, Utf8Strict, detectEncodingFromByteOrderMarks: true);
 
             var lineNumber = 0;
             string? line;
@@ -113,12 +117,19 @@ public sealed class FileGrepper
 
     private static async ValueTask<bool> IsBinaryAsync(Stream stream, CancellationToken ct)
     {
-        var buffer = new byte[BinarySniffBytes];
-        var read = await stream.ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, ct);
-        for (var i = 0; i < read; i++)
-            if (buffer[i] == 0)
-                return true;
-        return false;
+        // Pooled: a solution-wide grep sniffs thousands of files; a fresh 8 KB array each
+        // would be tens of MB of throwaway churn across the parallel workers.
+        var buffer = ArrayPool<byte>.Shared.Rent(BinarySniffBytes);
+        try
+        {
+            var window = buffer.AsMemory(0, BinarySniffBytes);
+            var read = await stream.ReadAtLeastAsync(window, BinarySniffBytes, throwOnEndOfStream: false, ct);
+            for (var i = 0; i < read; i++)
+                if (buffer[i] == 0)
+                    return true;
+            return false;
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
     private abstract class Matcher

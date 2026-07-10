@@ -10,6 +10,11 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
+    <!-- R2R is intentionally OFF: crossgen can't resolve the MSBuild/NuGet assemblies we deliberately
+         exclude from runtime (they're loaded from the SDK via MSBuildLocator), so it fails with NETSDK1096.
+         Same architecture that rules out AOT. The cold-start win for our own (small) code isn't worth a
+         fragile PublishReadyToRunExclude list. -->
+    <PublishReadyToRun>false</PublishReadyToRun>
     <DebugType>embedded</DebugType>
     <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>

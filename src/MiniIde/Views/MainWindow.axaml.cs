@@ -51,8 +51,11 @@ public partial class MainWindow : Window
             if (Vm is not null) Vm.RequestOpen += Reveal;
         };
         KeyDown += OnGlobalKeyDown;
+        // The panel starts expanded, so the toggle's band starts at the full strip height (see TabStripHeight).
+        BottomPanelToggleBand.Height = TabStripHeight;
         SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
         SolutionTree.AddHandler(PointerPressedEvent, OnTreePointerPressed, RoutingStrategies.Tunnel);
+        BottomTabs.AddHandler(PointerPressedEvent, OnBottomTabsPointerPressed, RoutingStrategies.Tunnel);
     }
 
     private async void OnGlobalKeyDown(object? sender, KeyEventArgs e)
@@ -262,9 +265,96 @@ public partial class MainWindow : Window
             foreach (var binder in _binders) binder.Unbind(editor);
     }
 
+    // ── Bottom panel collapse / expand ──
+    //
+    // Layout state, so it lives here and not in the VM (which has never held any). A bool and a stashed
+    // GridLength are the whole of it; nothing persists across restarts and nothing ever collapses implicitly.
+
+    /// <summary>The bottom row's height while collapsed — a bar showing just the tab headers. Deliberately far
+    /// below <see cref="ExpandedMinPanelHeight"/>: the floor exists to stop the splitter stranding the panel at
+    /// an unusable height, and collapsing is not that.</summary>
+    private const double CollapsedPanelHeight = 22;
+
+    /// <summary>The shortest the splitter may leave the panel while it's open. Also the floor on a restore,
+    /// since the height we stash was itself subject to it.</summary>
+    private const double ExpandedMinPanelHeight = 200;
+
+    /// <summary>Height of the tab-header strip — Fluent's <c>TabItem</c> MinHeight. The toggle is centred inside a
+    /// band of this height so it lines up with the tab labels; while collapsed the strip is squeezed down to the
+    /// row, and the band follows it to <see cref="CollapsedPanelHeight"/>.</summary>
+    private const double TabStripHeight = 48;
+
+    private bool _bottomCollapsed;
+    private GridLength _expandedPanelHeight;
+
+    private RowDefinition BottomRow => Workspace.RowDefinitions[2];
+
+    private void OnToggleBottomPanelClick(object? sender, RoutedEventArgs e)
+    {
+        if (_bottomCollapsed) ExpandBottomPanel();
+        else CollapseBottomPanel();
+    }
+
+    private void CollapseBottomPanel()
+    {
+        if (_bottomCollapsed) return;
+
+        // Read the height live rather than assuming the 220 in the markup: that's only the initial value, and
+        // the GridSplitter mutates the row's Height in place, so this is whatever the user last dragged it to.
+        _expandedPanelHeight = BottomRow.Height;
+
+        // The 200px floor only applies while the panel is open — drop it first, or it would clamp the bar back
+        // up to 200 and the collapse would do nothing.
+        BottomRow.MinHeight = 0;
+        BottomRow.Height = new GridLength(CollapsedPanelHeight);
+
+        // The header strip is squeezed to the row; the toggle's band has to shrink with it or the button
+        // centres against a 48px strip that isn't there any more and lands below the bar's bottom edge.
+        BottomPanelToggleBand.Height = CollapsedPanelHeight;
+
+        // Load-bearing: left draggable, the splitter would let the user pull a "collapsed" panel back open
+        // behind the toggle's back, desyncing the glyph from reality.
+        BottomSplitter.IsEnabled = false;
+
+        _bottomCollapsed = true;
+        BottomPanelToggle.Content = "▴";
+        ToolTip.SetTip(BottomPanelToggle, "Restore panel");
+    }
+
+    /// <summary>Restores the height the panel had immediately before it was collapsed. A no-op when already
+    /// expanded — that's what lets every reveal path call it unconditionally.</summary>
+    private void ExpandBottomPanel()
+    {
+        if (!_bottomCollapsed) return;
+
+        BottomRow.Height = _expandedPanelHeight;
+        BottomRow.MinHeight = ExpandedMinPanelHeight;
+        BottomPanelToggleBand.Height = TabStripHeight;
+        BottomSplitter.IsEnabled = true;
+
+        _bottomCollapsed = false;
+        BottomPanelToggle.Content = "▾";
+        ToolTip.SetTip(BottomPanelToggle, "Collapse panel");
+    }
+
+    /// <summary>Surfaces a bottom tab: expands the panel if it's collapsed, then selects the tab. Every path
+    /// that reveals a bottom tab goes through here, so none of them can forget the expand half.</summary>
+    private void ShowBottomTab(TabItem tab)
+    {
+        ExpandBottomPanel();
+        BottomTabs.SelectedItem = tab;
+    }
+
+    // Restoring on a tab click can't hang off SelectionChanged: clicking the *already-selected* tab doesn't
+    // raise it, so collapsing with Find active and then clicking "Find" would silently do nothing. Hang it off
+    // the press instead — tunnel-registered so it runs before the TabItem consumes the press, and we must NOT
+    // set e.Handled, or the press would no longer commit the selection. The collapsed guard keeps this inert
+    // during normal use; while collapsed the only things under the pointer are the 22px tab headers.
+    private void OnBottomTabsPointerPressed(object? sender, PointerPressedEventArgs e) => ExpandBottomPanel();
+
     private void FocusFind()
     {
-        BottomTabs.SelectedItem = FindTab;
+        ShowBottomTab(FindTab);
         Dispatcher.UIThread.Post(() =>
         {
             FindBox.Focus();
@@ -331,11 +421,14 @@ public partial class MainWindow : Window
         await Vm.GoToDefinitionAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset);
     }
 
+    // Surface the Find tab afterwards — the results are useless behind a collapsed panel or another tab. Not
+    // FocusFind: the user wants the results, and focusing + select-alling the query box would be noise here.
     private async Task FindRefsAsync()
     {
         var editor = FindActiveEditor();
         if (editor is null) return;
         await Vm.FindReferencesAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset);
+        ShowBottomTab(FindTab);
     }
 
     private void OnCodeCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)

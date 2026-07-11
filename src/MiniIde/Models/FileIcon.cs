@@ -7,6 +7,9 @@ namespace MiniIde.Models;
 // Codepoints live in Supplementary Private Use Area-A (U+F0000+).
 // C# \uXXXX only reaches U+FFFF; \U000FXXXX is required to encode these.
 // If MDI is bumped, re-verify every codepoint against the new release's cheatsheet.html.
+//
+// Added or changed a glyph below? Re-run the subset script (cd tools && npm run subset) —
+// the shipped font ships only the glyphs referenced in source. See ActionIcon for the why.
 public static class FileIcon
 {
     public const string CSharp     = "\U000F031B"; // language-csharp

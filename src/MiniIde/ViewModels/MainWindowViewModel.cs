@@ -18,6 +18,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public SearchService Search { get; }
     public NuGetService NuGet { get; }
     public RunService Run { get; }
+    public ShellService Shell { get; }
     public SyntaxHighlightService Highlight { get; }
 
     public FindResultsViewModel Find { get; }
@@ -44,6 +45,7 @@ public partial class MainWindowViewModel : ViewModelBase
         Search = new SearchService();
         NuGet = new NuGetService();
         Run = new RunService();
+        Shell = new ShellService();
         Highlight = new SyntaxHighlightService();
         Workspace.Progress += m => Dispatcher.UIThread.Post(() => Status = m);
         Find = new FindResultsViewModel(Search, Solution, async (f, l, c) =>

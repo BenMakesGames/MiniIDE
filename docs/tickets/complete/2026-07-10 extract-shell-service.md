@@ -95,3 +95,24 @@ If `System.Diagnostics` (Process) is no longer referenced anywhere in `MainWindo
 - [ ] **Open with Claude Code** with no solution loaded sets status `"No solution open"` and launches nothing.
 - [ ] **Copy relative path** on a nested file (e.g. `src/MiniIde/Program.cs`) copies `src\MiniIde\Program.cs`; on the solution name copies the bare `MiniIde.slnx`; **Copy absolute path** still copies the full path with a `Copied <path>` status. (Regression: `ToRelativePath` parity.)
 - [ ] No exceptions in the Output pane throughout.
+
+## Learnings
+
+### Open Decisions — how they resolved
+1. **Error propagation** → **throw** (the ticket default). `ShellService.RevealInExplorer` / `OpenTerminalWithClaude` let `Process.Start` failures propagate; each thin code-behind handler keeps its existing `try/catch → Vm.Status = "...: {ex.Message}"`. Keeps the service signature `void` and the status-message ownership in the view, exactly as before.
+2. **Relative-path home** → **`SolutionService.ToRelativePath`** (the ticket default). The solution directory is the anchor and already lives on `SolutionService`. Implemented as a one-line expression-bodied member mirroring the old inline math verbatim (silent absolute fallback when `SolutionPath` is null; the solution file itself yields its bare filename via `Path.GetRelativePath`).
+3. **Method names** → kept the ticket's defaults: `RevealInExplorer(string path, bool isFolder)` and `OpenTerminalWithClaude(string directory)`. The `isFolder` decision (`ctx is TreeNode { Kind: NodeKind.Folder }`) stays in the code-behind — `ShellService` never sees a `TreeNode`.
+
+### Freshness delta from `output-as-file-tabs` (completed same day)
+The ticket predated the fileless-output-tab work, so two things had shifted since it was written — both handled without changing the ticket's scope:
+- **A third imperative-menu-state handler now exists: `OnTabHeaderCtxOpening`** (`MainWindow.axaml.cs`, wired at `MainWindow.axaml:132`). It disables the tab-header path actions when the tab under the menu has no `FilePath`. It is the same *kind* of handler the ticket's "Out of scope" note parks for the §1c imperative-menu-state ticket (alongside `OnSolutionCtxOpening` / `OnCodeCtxOpening`), so it was left untouched.
+- **`TabViewModelBase.FilePath` is now nullable** (output tabs return null). This did **not** affect the extraction: `GetTargetPath` already returns null for a null `FilePath`, so the thinned `OnCtxOpenInExplorerClick` / `OnCtxCopyRelativePathClick` still bail correctly on output tabs. The delegations stayed null-safe with no extra guarding.
+
+### Tidbits
+- `System.Diagnostics` was **kept** in `MainWindow.axaml.cs` (ticket step 5 was conditional): `LaunchNewInstance` still builds a `ProcessStartInfo` / calls `Process.Start` (new-instance launch on opening a second solution), so the `using` is still load-bearing.
+- Existing services in this codebase are declared `public class` (not `sealed`); `ShellService` follows the ticket's explicit `sealed` instruction — a minor, harmless divergence from the local convention, justified because nothing subclasses services here.
+- `UseShellExecute = true` is the deliberate contrast with `RunService`/`NuGetService` (`= false`, windowless, piped). Explorer and the terminal launch need a visible window, so shell-execute is correct despite the rest of the codebase using the windowless form.
+
+### Verification status
+- Compile-check passed (temp-`-o` build): 0 errors; only the three pre-existing warnings (CS0618 `Workspace.WorkspaceFailed`, IL3000 in `SyntaxHighlightService`, AVLN5001 `TextBox.Watermark` at `MainWindow.axaml:210`) — none in touched code, no new warnings.
+- The remaining Test Plan items are interactive Windows-GUI checks (context-menu Explorer reveal, `wt`/PowerShell launch, clipboard copy) that can't be automated. Because the extraction is a **verbatim code move** — the process-launch and relative-path bodies were relocated unchanged — runtime behavior is identical to pre-refactor; these were left for a human manual pass.

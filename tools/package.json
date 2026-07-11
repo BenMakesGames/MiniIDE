@@ -1,0 +1,13 @@
+{
+  "name": "miniide-icon-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Regenerates the shipped Material Design Icons subset from the glyph codepoints referenced in MiniIde source.",
+  "scripts": {
+    "subset": "node subset-icons.mjs"
+  },
+  "devDependencies": {
+    "opentype.js": "^2.0.0"
+  }
+}

@@ -13,6 +13,14 @@ public class SolutionService
     public string? SolutionPath { get; private set; }
     public IReadOnlyList<ProjectEntry> Projects { get; private set; } = System.Array.Empty<ProjectEntry>();
 
+    /// <summary>The solution-relative form of an absolute path, anchored on the solution directory.
+    /// Returns <paramref name="absolutePath"/> unchanged when no solution is loaded. The solution file
+    /// itself yields its bare filename.</summary>
+    public string ToRelativePath(string absolutePath) =>
+        SolutionPath is null
+            ? absolutePath
+            : Path.GetRelativePath(Path.GetDirectoryName(SolutionPath)!, absolutePath);
+
     public async Task<IReadOnlyList<TreeNode>> LoadAsync(string path, CancellationToken ct = default)
     {
         SolutionPath = path;

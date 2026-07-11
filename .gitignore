@@ -4,3 +4,6 @@ bin/
 obj/
 
 /publish/
+
+# icon-subset tooling (tools/) — the package-lock.json IS committed
+node_modules/

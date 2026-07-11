@@ -103,10 +103,6 @@ public partial class MainWindow : Window
         _ => null
     };
 
-    // Set once wt.exe fails to launch (absent execution alias); subsequent invocations skip straight to
-    // PowerShell for the app's lifetime. Resetting between app runs is fine.
-    private bool _wtUnavailable;
-
     // With no solution loaded, every solution-scoped item is disabled; only "Open new solution..."
     // stays live so a solution can be opened from the menu at startup.
     private void OnSolutionCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -123,29 +119,7 @@ public partial class MainWindow : Window
         var slnPath = Vm.Solution.SolutionPath;
         var dir = slnPath is null ? null : Path.GetDirectoryName(slnPath);
         if (dir is null) { Vm.Status = "No solution open"; return; }
-
-        if (!_wtUnavailable)
-        {
-            try
-            {
-                var wt = new ProcessStartInfo { FileName = "wt.exe", UseShellExecute = true };
-                wt.ArgumentList.Add("-d");
-                wt.ArgumentList.Add(dir);
-                wt.ArgumentList.Add("claude");
-                Process.Start(wt);
-                return;
-            }
-            catch (Exception) { _wtUnavailable = true; } // wt not installed — fall through to PowerShell
-        }
-
-        try
-        {
-            var ps = new ProcessStartInfo { FileName = "powershell.exe", WorkingDirectory = dir, UseShellExecute = true };
-            ps.ArgumentList.Add("-NoExit");
-            ps.ArgumentList.Add("-Command");
-            ps.ArgumentList.Add("claude");
-            Process.Start(ps);
-        }
+        try { Vm.Shell.OpenTerminalWithClaude(dir); }
         catch (Exception ex) { Vm.Status = $"Open with Claude Code failed: {ex.Message}"; }
     }
 
@@ -155,13 +129,7 @@ public partial class MainWindow : Window
         var target = GetTargetPath(ctx);
         if (target is null) return;
         var isFolder = ctx is TreeNode { Kind: NodeKind.Folder };
-        try
-        {
-            var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = true };
-            if (isFolder) psi.ArgumentList.Add(target);
-            else { psi.ArgumentList.Add("/select,"); psi.ArgumentList.Add(target); }
-            Process.Start(psi);
-        }
+        try { Vm.Shell.RevealInExplorer(target, isFolder); }
         catch (Exception ex) { Vm.Status = $"Open in Explorer failed: {ex.Message}"; }
     }
 
@@ -176,11 +144,7 @@ public partial class MainWindow : Window
     {
         var target = GetTargetPath((sender as MenuItem)?.DataContext);
         if (target is null) return;
-        var slnPath = Vm.Solution.SolutionPath;
-        var text = slnPath is null
-            ? target
-            : Path.GetRelativePath(Path.GetDirectoryName(slnPath)!, target);
-        await CopyToClipboardAsync(text);
+        await CopyToClipboardAsync(Vm.Solution.ToRelativePath(target));
     }
 
     private async Task CopyToClipboardAsync(string text)

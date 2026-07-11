@@ -158,7 +158,8 @@
                                            Foreground="#DCDCDC"
                                            Name="Editor"
                                            AttachedToVisualTree="OnEditorAttached"
-                                           DataContextChanged="OnEditorDataContextChanged">
+                                           DataContextChanged="OnEditorDataContextChanged"
+                                           DetachedFromVisualTree="OnEditorDetached">
                                 <ae:TextEditor.ContextMenu>
                                     <ContextMenu Opening="OnCodeCtxOpening">
                                         <MenuItem Name="CtxSearchItem" Header="Search solution" InputGesture="Ctrl+Shift+F" Click="OnCtxSearchClick"/>
@@ -177,7 +178,8 @@
                                            Background="#000000"
                                            Foreground="#DCDCDC"
                                            AttachedToVisualTree="OnOutputEditorAttached"
-                                           DataContextChanged="OnOutputEditorDataContextChanged"/>
+                                           DataContextChanged="OnOutputEditorDataContextChanged"
+                                           DetachedFromVisualTree="OnOutputEditorDetached"/>
                         </DataTemplate>
                         <DataTemplate DataType="vm:ImageTabViewModel">
                             <Grid Background="#1E1E22">

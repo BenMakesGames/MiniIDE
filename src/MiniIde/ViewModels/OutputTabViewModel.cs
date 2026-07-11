@@ -9,16 +9,15 @@ namespace MiniIde.ViewModels;
 /// <c>run:</c>/<c>nuget:</c> key, and its <see cref="Header"/> is fixed at construction. Save is a no-op.
 /// <see cref="Append"/> is called from the background stdout/stderr readers, so both mutators marshal to
 /// the UI thread.</summary>
-public class OutputTabViewModel : TabViewModelBase
+public class OutputTabViewModel : DocumentTabViewModel
 {
     private const int MaxLines = 5000;
-
-    public TextDocument Document { get; } = new();
 
     private readonly string _header;
     public override string Header => _header;
 
-    public OutputTabViewModel(string tabId, string header) : base(tabId, filePath: null) => _header = header;
+    public OutputTabViewModel(string tabId, string header)
+        : base(tabId, filePath: null, new TextDocument()) => _header = header;
 
     public void Clear() => Dispatcher.UIThread.Post(() => Document.Text = "");
 

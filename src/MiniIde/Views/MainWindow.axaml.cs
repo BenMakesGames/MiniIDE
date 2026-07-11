@@ -1,24 +1,16 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
-using Avalonia.Media;
-using Avalonia.Media.Immutable;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using AvaloniaEdit;
-using AvaloniaEdit.Document;
-using AvaloniaEdit.Rendering;
-using Microsoft.CodeAnalysis.Classification;
 using MiniIde.Models;
 using MiniIde.ViewModels;
 
@@ -35,9 +27,17 @@ public partial class MainWindow : Window
 
     private MainWindowViewModel Vm => (MainWindowViewModel)DataContext!;
 
+    // One binder per editor kind — never a merged registry (see TabEditorBinder). The code binder's
+    // registry therefore holds only code-tab editors, which is what makes FindActiveEditor unambiguous.
+    private readonly TabEditorBinder<EditorTabViewModel, CodeEditorState> _codeEditors;
+    private readonly TabEditorBinder<OutputTabViewModel, OutputEditorState> _outputEditors;
+
     public MainWindow()
     {
         InitializeComponent();
+        // Deferred: Vm isn't set at ctor time — the classify call resolves it when the colorizer first runs.
+        _codeEditors = TabEditorBinder.ForCodeTabs(src => Vm.Highlight.ClassifyAsync(src));
+        _outputEditors = TabEditorBinder.ForOutputTabs();
         DataContextChanged += (_, _) =>
         {
             if (Vm is not null) Vm.RequestOpen += OpenHit;
@@ -70,15 +70,10 @@ public partial class MainWindow : Window
         editor.Focus();
     }
 
-    // Output tabs now realize a TextEditor too, so match only editor tabs — otherwise F12/Shift+F12 on an
-    // active output tab would resolve against a fileless tab. This keeps the invariant that a non-null result
-    // implies ActiveTab is an EditorTabViewModel (so its FilePath is non-null).
-    private TextEditor? FindActiveEditor()
-    {
-        var host = this.GetVisualDescendants().OfType<TextEditor>()
-            .FirstOrDefault(e => e.DataContext is EditorTabViewModel && e.DataContext == Vm.ActiveTab);
-        return host;
-    }
+    /// <summary>The editor showing the active tab, or null when the active tab isn't a code tab. Only code
+    /// editors are ever registered with <see cref="_codeEditors"/>, so a non-null result implies
+    /// <c>ActiveTab</c> is an <see cref="EditorTabViewModel"/> (and its <c>FilePath</c> is non-null).</summary>
+    private TextEditor? FindActiveEditor() => _codeEditors.EditorFor(Vm.ActiveTab);
 
     private async void OnOpenSolutionClick(object? sender, RoutedEventArgs e) => await OpenSolutionDialogAsync();
 
@@ -216,168 +211,38 @@ public partial class MainWindow : Window
         if (e.Key == Key.Enter) Vm.Find.SearchCommand.Execute(null);
     }
 
+    // The TabControl reuses one realized TextEditor across all tabs of the same DataType and swaps its
+    // DataContext, so binding must run on every DataContextChanged, not once on attach — and must be undone
+    // on detach, since switching to a tab of a different DataType realizes a different control and discards
+    // this one (see docs/avalonia.md). TabEditorBinder owns that lifecycle for both kinds.
     private void OnEditorAttached(object? sender, VisualTreeAttachmentEventArgs e)
     {
-        if (sender is TextEditor editor) BindEditor(editor);
+        if (sender is TextEditor editor) _codeEditors.Bind(editor);
     }
 
     private void OnEditorDataContextChanged(object? sender, EventArgs e)
     {
-        if (sender is TextEditor editor) BindEditor(editor);
+        if (sender is TextEditor editor) _codeEditors.Bind(editor);
+    }
+
+    private void OnEditorDetached(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (sender is TextEditor editor) _codeEditors.Unbind(editor);
     }
 
     private void OnOutputEditorAttached(object? sender, VisualTreeAttachmentEventArgs e)
     {
-        if (sender is TextEditor editor) BindOutputEditor(editor);
+        if (sender is TextEditor editor) _outputEditors.Bind(editor);
     }
 
     private void OnOutputEditorDataContextChanged(object? sender, EventArgs e)
     {
-        if (sender is TextEditor editor) BindOutputEditor(editor);
+        if (sender is TextEditor editor) _outputEditors.Bind(editor);
     }
 
-    private readonly Dictionary<TextEditor, OutputBinding> _outputBindings = new();
-
-    // Avalonia's TabControl swaps the content presenter's DataContext between two OutputTabViewModel tabs
-    // rather than realizing a fresh TextEditor, so one editor is shared across all output tabs. Mirror
-    // BindEditor: on every attach/DataContextChanged, re-point Document at the active tab's buffer and
-    // re-wire tail-follow, detaching the previous document's handlers first.
-    private void BindOutputEditor(TextEditor editor)
+    private void OnOutputEditorDetached(object? sender, VisualTreeAttachmentEventArgs e)
     {
-        if (editor.DataContext is not OutputTabViewModel tab) return;
-
-        if (!_outputBindings.TryGetValue(editor, out var b))
-        {
-            b = new OutputBinding();
-            _outputBindings[editor] = b;
-        }
-
-        if (ReferenceEquals(b.CurrentTab, tab)) return;
-
-        if (b.CurrentDoc is not null)
-        {
-            if (b.ChangingHandler is not null) b.CurrentDoc.Changing -= b.ChangingHandler;
-            if (b.ChangedHandler is not null) b.CurrentDoc.Changed -= b.ChangedHandler;
-        }
-
-        var doc = tab.Document;
-        b.CurrentTab = tab;
-        b.CurrentDoc = doc;
-        editor.Document = doc;
-
-        const double epsilon = 1.0;
-        b.ChangingHandler = (_, _) =>
-        {
-            var scroll = (Avalonia.Controls.Primitives.ILogicalScrollable)editor.TextArea.TextView;
-            b.WasAtBottom = scroll.Offset.Y >= scroll.Extent.Height - scroll.Viewport.Height - epsilon;
-        };
-        b.ChangedHandler = (_, _) =>
-        {
-            if (b.WasAtBottom) editor.ScrollToLine(editor.Document.LineCount);
-        };
-        doc.Changing += b.ChangingHandler;
-        doc.Changed += b.ChangedHandler;
-    }
-
-    private class OutputBinding
-    {
-        public OutputTabViewModel? CurrentTab;
-        public TextDocument? CurrentDoc;
-        public EventHandler<DocumentChangeEventArgs>? ChangingHandler;
-        public EventHandler<DocumentChangeEventArgs>? ChangedHandler;
-        public bool WasAtBottom = true;
-    }
-
-    private readonly System.Collections.Generic.Dictionary<TextEditor, EditorBinding> _bindings = new();
-
-    private void BindEditor(TextEditor editor)
-    {
-        if (editor.DataContext is not EditorTabViewModel tab) return;
-
-        if (!_bindings.TryGetValue(editor, out var b))
-        {
-            b = new EditorBinding();
-            _bindings[editor] = b;
-            editor.Options.ConvertTabsToSpaces = true;
-            editor.Options.IndentationSize = 4;
-            b.Colorizer = new RoslynColorizer(async src => await Vm.Highlight.ClassifyAsync(src));
-            editor.TextArea.TextView.LineTransformers.Add(b.Colorizer);
-            editor.TextArea.Caret.PositionChanged += (_, _) =>
-            {
-                if (editor.DataContext is EditorTabViewModel t) t.CaretOffset = editor.CaretOffset;
-            };
-            // Tunnel so we place the caret before AvaloniaEdit's own pointer logic and before the menu opens.
-            editor.AddHandler(PointerPressedEvent, OnEditorPointerPressed, RoutingStrategies.Tunnel);
-        }
-
-        if (ReferenceEquals(b.CurrentTab, tab)) return;
-
-        if (b.CurrentDoc is not null && b.TextChangedHandler is not null)
-            b.CurrentDoc.TextChanged -= b.TextChangedHandler;
-
-        // Drop any reclassify still pending from the tab we're leaving.
-        b.DebounceCts?.Cancel();
-
-        b.CurrentTab = tab;
-        b.CurrentDoc = tab.Document;
-        editor.Document = tab.Document;
-
-        // Debounce: a burst of keystrokes reclassifies the whole document (a full Roslyn snapshot)
-        // only once typing pauses, instead of on every character.
-        b.TextChangedHandler = (_, _) =>
-        {
-            b.DebounceCts?.Cancel();
-            b.DebounceCts?.Dispose();
-            var cts = new CancellationTokenSource();
-            b.DebounceCts = cts;
-            _ = DebouncedRefreshAsync(b.Colorizer!, editor, tab.Mode, cts.Token);
-        };
-        tab.Document.TextChanged += b.TextChangedHandler;
-
-        // Initial highlight of the newly-shown document is immediate, not debounced.
-        _ = RefreshAndRedraw(b.Colorizer!, editor, tab.Mode);
-    }
-
-    private const int HighlightDebounceMs = 200;
-
-    private static async Task DebouncedRefreshAsync(RoslynColorizer colorizer, TextEditor editor, HighlightMode mode, CancellationToken ct)
-    {
-        try { await Task.Delay(HighlightDebounceMs, ct); }
-        catch (OperationCanceledException) { return; }
-        await RefreshAndRedraw(colorizer, editor, mode);
-    }
-
-    private static async Task RefreshAndRedraw(RoslynColorizer colorizer, TextEditor editor, HighlightMode mode)
-    {
-        switch (mode)
-        {
-            case HighlightMode.CSharp:
-                editor.SyntaxHighlighting = null;
-                await colorizer.RefreshAsync(editor.Document.Text);
-                break;
-            case HighlightMode.Xml:
-                colorizer.Clear();
-                editor.SyntaxHighlighting = XshdDarkPalette.Tune("XML");
-                break;
-            case HighlightMode.Json:
-                colorizer.Clear();
-                editor.SyntaxHighlighting = XshdDarkPalette.Tune("Json");
-                break;
-            default:
-                colorizer.Clear();
-                editor.SyntaxHighlighting = null;
-                break;
-        }
-        editor.TextArea.TextView.Redraw();
-    }
-
-    private class EditorBinding
-    {
-        public EditorTabViewModel? CurrentTab;
-        public AvaloniaEdit.Document.TextDocument? CurrentDoc;
-        public RoslynColorizer? Colorizer;
-        public EventHandler? TextChangedHandler;
-        public CancellationTokenSource? DebounceCts;
+        if (sender is TextEditor editor) _outputEditors.Unbind(editor);
     }
 
     private void FocusFind()
@@ -513,25 +378,7 @@ public partial class MainWindow : Window
 
     private static string Ellipsize(string s) => s.Length <= 30 ? s : s.Substring(0, 30) + "…";
 
-    private RoslynColorizer? ColorizerFor(TextEditor editor)
-        => _bindings.TryGetValue(editor, out var b) ? b.Colorizer : null;
-
-    private void OnEditorPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (sender is not TextEditor editor || editor.Document is null) return;
-        var point = e.GetCurrentPoint(editor);
-        if (!point.Properties.IsRightButtonPressed) return;
-        var pos = editor.GetPositionFromPoint(point.Position);
-        if (pos is null) return;
-        var offset = editor.Document.GetOffset(pos.Value.Line, pos.Value.Column);
-        // Preserve a selection the user right-clicked inside (so "Search selection" keeps the full phrase);
-        // otherwise move the caret to the clicked token and collapse any stale selection.
-        if (editor.SelectionLength > 0 &&
-            offset >= editor.SelectionStart && offset <= editor.SelectionStart + editor.SelectionLength)
-            return;
-        editor.TextArea.ClearSelection();
-        editor.CaretOffset = offset;
-    }
+    private RoslynColorizer? ColorizerFor(TextEditor editor) => _codeEditors.StateFor(editor)?.Colorizer;
 
     private void OnCodeCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
@@ -594,79 +441,4 @@ public partial class MainWindow : Window
     private async void OnCtxFindUsagesClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
     private async void OnCtxGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
-}
-
-internal class RoslynColorizer : DocumentColorizingTransformer
-{
-    private readonly Func<string, Task<IReadOnlyList<ClassifiedSpan>>> _classify;
-    private IReadOnlyList<ClassifiedSpan> _spans = System.Array.Empty<ClassifiedSpan>();
-
-    public RoslynColorizer(Func<string, Task<IReadOnlyList<ClassifiedSpan>>> classify) { _classify = classify; }
-
-    public async Task RefreshAsync(string source)
-    {
-        try { _spans = await _classify(source); }
-        catch { _spans = System.Array.Empty<ClassifiedSpan>(); }
-    }
-
-    public void Clear() => _spans = System.Array.Empty<ClassifiedSpan>();
-
-    /// <summary>The classification of the cached span covering <paramref name="offset"/>, or null if none.
-    /// Reads the existing span cache synchronously — no reclassification.</summary>
-    public string? ClassificationAt(int offset)
-    {
-        foreach (var span in _spans)
-            if (offset >= span.TextSpan.Start && offset < span.TextSpan.End)
-                return span.ClassificationType;
-        return null;
-    }
-
-    protected override void ColorizeLine(DocumentLine line)
-    {
-        int lineStart = line.Offset;
-        int lineEnd = line.EndOffset;
-        foreach (var span in _spans)
-        {
-            if (span.TextSpan.End <= lineStart) continue;
-            if (span.TextSpan.Start >= lineEnd) break;
-            var start = Math.Max(span.TextSpan.Start, lineStart);
-            var end = Math.Min(span.TextSpan.End, lineEnd);
-            var brush = BrushFor(span.ClassificationType);
-            if (brush is null) continue;
-            ChangeLinePart(start, end, el => el.TextRunProperties.SetForegroundBrush(brush));
-        }
-    }
-
-    // Shared, immutable brushes: ColorizeLine runs per visible span per redraw, so a fresh
-    // SolidColorBrush per call would allocate dozens of throwaway brushes every frame.
-    private static readonly IBrush KeywordBrush = new ImmutableSolidColorBrush(Color.FromRgb(86, 156, 214));
-    private static readonly IBrush StringBrush = new ImmutableSolidColorBrush(Color.FromRgb(206, 145, 120));
-    private static readonly IBrush NumberBrush = new ImmutableSolidColorBrush(Color.FromRgb(181, 206, 168));
-    private static readonly IBrush CommentBrush = new ImmutableSolidColorBrush(Color.FromRgb(106, 153, 85));
-    private static readonly IBrush TypeBrush = new ImmutableSolidColorBrush(Color.FromRgb(78, 201, 176));
-    private static readonly IBrush MethodBrush = new ImmutableSolidColorBrush(Color.FromRgb(220, 220, 170));
-    private static readonly IBrush MemberBrush = new ImmutableSolidColorBrush(Color.FromRgb(156, 220, 254));
-    private static readonly IBrush NamespaceBrush = new ImmutableSolidColorBrush(Color.FromRgb(200, 200, 200));
-
-    private static IBrush? BrushFor(string kind) => kind switch
-    {
-        ClassificationTypeNames.Keyword or ClassificationTypeNames.ControlKeyword or ClassificationTypeNames.PreprocessorKeyword
-            => KeywordBrush,
-        ClassificationTypeNames.StringLiteral or ClassificationTypeNames.VerbatimStringLiteral or ClassificationTypeNames.StringEscapeCharacter
-            => StringBrush,
-        ClassificationTypeNames.NumericLiteral
-            => NumberBrush,
-        ClassificationTypeNames.Comment or ClassificationTypeNames.XmlDocCommentText
-            => CommentBrush,
-        ClassificationTypeNames.ClassName or ClassificationTypeNames.StructName or ClassificationTypeNames.InterfaceName
-            or ClassificationTypeNames.EnumName or ClassificationTypeNames.DelegateName or ClassificationTypeNames.RecordClassName
-            => TypeBrush,
-        ClassificationTypeNames.MethodName or ClassificationTypeNames.ExtensionMethodName
-            => MethodBrush,
-        ClassificationTypeNames.PropertyName or ClassificationTypeNames.FieldName or ClassificationTypeNames.ConstantName
-        or ClassificationTypeNames.LocalName or ClassificationTypeNames.ParameterName
-            => MemberBrush,
-        ClassificationTypeNames.NamespaceName => NamespaceBrush,
-        _ => null
-    };
 }

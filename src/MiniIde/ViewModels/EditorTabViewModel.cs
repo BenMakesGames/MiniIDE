@@ -6,17 +6,16 @@ using MiniIde.Models;
 
 namespace MiniIde.ViewModels;
 
-public partial class EditorTabViewModel : TabViewModelBase
+public partial class EditorTabViewModel : DocumentTabViewModel
 {
-    public TextDocument Document { get; }
     public HighlightMode Mode { get; }
 
     [ObservableProperty] private int _caretOffset;
 
-    public EditorTabViewModel(string filePath) : base(FileId(filePath), filePath)
+    public EditorTabViewModel(string filePath)
+        : base(FileId(filePath), filePath, new TextDocument(File.ReadAllText(filePath)))
     {
         Mode = Path.GetExtension(filePath).ToFileKind().GetInfo().Highlight;
-        Document = new TextDocument(File.ReadAllText(filePath));
         Document.TextChanged += (_, _) => { IsDirty = true; OnPropertyChanged(nameof(Header)); };
     }
 

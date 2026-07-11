@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -29,8 +30,13 @@ public partial class MainWindow : Window
 
     // One binder per editor kind — never a merged registry (see TabEditorBinder). The code binder's
     // registry therefore holds only code-tab editors, which is what makes FindActiveEditor unambiguous.
-    private readonly TabEditorBinder<EditorTabViewModel, CodeEditorState> _codeEditors;
+    private readonly TabEditorBinder<EditorTabViewModel, RoslynColorizer> _codeEditors;
     private readonly TabEditorBinder<OutputTabViewModel, OutputEditorState> _outputEditors;
+
+    // Both editor DataTemplates share one set of lifecycle handlers; each binder ignores editors showing a
+    // tab of the other kind, so offering every event to every binder is correct and keeps the window from
+    // growing a parallel handler trio per editor kind.
+    private readonly ITabEditorBinder[] _binders;
 
     public MainWindow()
     {
@@ -38,9 +44,11 @@ public partial class MainWindow : Window
         // Deferred: Vm isn't set at ctor time — the classify call resolves it when the colorizer first runs.
         _codeEditors = TabEditorBinder.ForCodeTabs(src => Vm.Highlight.ClassifyAsync(src));
         _outputEditors = TabEditorBinder.ForOutputTabs();
+        _binders = [_codeEditors, _outputEditors];
+
         DataContextChanged += (_, _) =>
         {
-            if (Vm is not null) Vm.RequestOpen += OpenHit;
+            if (Vm is not null) Vm.RequestOpen += Reveal;
         };
         KeyDown += OnGlobalKeyDown;
         SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
@@ -59,15 +67,35 @@ public partial class MainWindow : Window
         else if (e.Key == Key.F12 && shift) { e.Handled = true; await FindRefsAsync(); }
     }
 
-    private async Task OpenHit(string file, int line, int col)
+    /// <summary>Shows a location: opens its file, then puts the caret exactly on the hit, scrolls it into view,
+    /// and focuses the editor. The view owns this because only it has the realized editor; every navigation
+    /// source (find results, problems, go-to-definition) reaches it through
+    /// <see cref="MainWindowViewModel.RequestOpen"/>.</summary>
+    private async Task Reveal(SourceLocation location)
     {
-        await Vm.OpenFileAsync(file, line, col);
+        await Vm.OpenFileAsync(location.File);
+
+        // Opening a file (or switching tabs) only queues the work: the TabControl realizes the TextEditor and
+        // the binder points it at the new document during the next layout pass. Positioning the caret before
+        // that would either find no editor at all or write into the outgoing tab's document, so yield until
+        // layout has run.
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Loaded);
+
         var editor = FindActiveEditor();
-        if (editor is null) return;
-        var offset = editor.Document.GetOffset(line, col);
-        editor.CaretOffset = offset;
-        editor.ScrollTo(line, col);
+        if (editor?.Document is null) return;
+
+        editor.CaretOffset = OffsetOf(editor.Document, location);
+        editor.ScrollTo(location.Line, location.Column);
         editor.Focus();
+    }
+
+    /// <summary>The offset of <paramref name="location"/>, clamped into the document. A hit can name a position
+    /// that no longer exists — the file may have changed on disk since the search ran, or a diagnostic may point
+    /// one past the last column — and <c>TextDocument.GetOffset</c> throws on an out-of-range line.</summary>
+    private static int OffsetOf(AvaloniaEdit.Document.TextDocument document, SourceLocation location)
+    {
+        var line = document.GetLineByNumber(Math.Clamp(location.Line, 1, document.LineCount));
+        return line.Offset + Math.Clamp(location.Column - 1, 0, line.Length);
     }
 
     /// <summary>The editor showing the active tab, or null when the active tab isn't a code tab. Only code
@@ -214,50 +242,33 @@ public partial class MainWindow : Window
     // The TabControl reuses one realized TextEditor across all tabs of the same DataType and swaps its
     // DataContext, so binding must run on every DataContextChanged, not once on attach — and must be undone
     // on detach, since switching to a tab of a different DataType realizes a different control and discards
-    // this one (see docs/avalonia.md). TabEditorBinder owns that lifecycle for both kinds.
+    // this one (see docs/avalonia.md). TabEditorBinder owns that lifecycle; both editor templates route here,
+    // and each binder ignores editors it doesn't own.
     private void OnEditorAttached(object? sender, VisualTreeAttachmentEventArgs e)
     {
-        if (sender is TextEditor editor) _codeEditors.Bind(editor);
+        if (sender is TextEditor editor)
+            foreach (var binder in _binders) binder.Bind(editor);
     }
 
     private void OnEditorDataContextChanged(object? sender, EventArgs e)
     {
-        if (sender is TextEditor editor) _codeEditors.Bind(editor);
+        if (sender is TextEditor editor)
+            foreach (var binder in _binders) binder.Bind(editor);
     }
 
     private void OnEditorDetached(object? sender, VisualTreeAttachmentEventArgs e)
     {
-        if (sender is TextEditor editor) _codeEditors.Unbind(editor);
-    }
-
-    private void OnOutputEditorAttached(object? sender, VisualTreeAttachmentEventArgs e)
-    {
-        if (sender is TextEditor editor) _outputEditors.Bind(editor);
-    }
-
-    private void OnOutputEditorDataContextChanged(object? sender, EventArgs e)
-    {
-        if (sender is TextEditor editor) _outputEditors.Bind(editor);
-    }
-
-    private void OnOutputEditorDetached(object? sender, VisualTreeAttachmentEventArgs e)
-    {
-        if (sender is TextEditor editor) _outputEditors.Unbind(editor);
+        if (sender is TextEditor editor)
+            foreach (var binder in _binders) binder.Unbind(editor);
     }
 
     private void FocusFind()
     {
-        var tabs = this.FindControl<TabControl>("BottomTabs");
-        var findTab = this.FindControl<TabItem>("FindTab");
-        if (tabs is not null && findTab is not null)
-            tabs.SelectedItem = findTab;
-
+        BottomTabs.SelectedItem = FindTab;
         Dispatcher.UIThread.Post(() =>
         {
-            var box = this.FindControl<TextBox>("FindBox");
-            if (box is null) return;
-            box.Focus();
-            box.SelectAll();
+            FindBox.Focus();
+            FindBox.SelectAll();
         }, DispatcherPriority.Background);
     }
 
@@ -310,111 +321,44 @@ public partial class MainWindow : Window
         if (Vm.ActiveTab is not null) await Vm.ActiveTab.SaveCommand.ExecuteAsync(null);
     }
 
+    // ── Code-editor context menu (Search / Find usages / Go to definition) ──
+
+    // FindActiveEditor matched a code editor, so ActiveTab is an EditorTabViewModel and its FilePath is non-null.
     private async Task GoToDefinitionAsync()
     {
         var editor = FindActiveEditor();
-        if (editor is null || Vm.ActiveTab is null) return;
-        // FindActiveEditor matched an editor tab, so FilePath is non-null.
-        var result = await Vm.GoToDefinitionAsync(Vm.ActiveTab.FilePath!, editor.CaretOffset);
-        if (result is null) return;
-        await OpenHit(result.Value.Item1, result.Value.Item2, result.Value.Item3);
+        if (editor is null) return;
+        await Vm.GoToDefinitionAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset);
     }
 
     private async Task FindRefsAsync()
     {
         var editor = FindActiveEditor();
-        if (editor is null || Vm.ActiveTab is null) return;
-        // FindActiveEditor matched an editor tab, so FilePath is non-null.
-        var refs = await Vm.FindReferencesAsync(Vm.ActiveTab.FilePath!, editor.CaretOffset);
-        if (refs is null) { Vm.Find.Results.Clear(); Vm.Find.Status = "No symbol found"; return; }
-        PopulateRefs(refs);
+        if (editor is null) return;
+        await Vm.FindReferencesAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset);
     }
-
-    private void PopulateRefs(System.Collections.Generic.IReadOnlyList<(string, int, int, string)> refs)
-    {
-        Vm.Find.Results.Clear();
-        foreach (var r in refs) Vm.Find.Results.Add(new FindHit(r.Item1, r.Item2, r.Item3, r.Item4));
-        Vm.Find.Status = $"{refs.Count} reference(s)";
-    }
-
-    // ── Code-editor context menu (Search / Find usages / Go to definition) ──
-
-    private static bool IsIdentifierChar(char c) => c == '_' || char.IsLetterOrDigit(c);
-
-    /// <summary>The [start, end) of the identifier run covering <paramref name="offset"/>, or an empty
-    /// range (start == end) when the offset is not on/adjacent to an identifier.</summary>
-    private static (int Start, int End) IdentifierRunAt(string text, int offset)
-    {
-        if (offset < 0) offset = 0;
-        if (offset > text.Length) offset = text.Length;
-        int start = offset, end = offset;
-        while (start > 0 && IsIdentifierChar(text[start - 1])) start--;
-        while (end < text.Length && IsIdentifierChar(text[end])) end++;
-        return (start, end);
-    }
-
-    /// <summary>The query term for the Search action: the selection if non-empty, else the identifier run
-    /// under the caret, else null.</summary>
-    private static string? TermAt(TextEditor editor)
-    {
-        var sel = editor.SelectedText;
-        if (!string.IsNullOrEmpty(sel)) return sel;
-        var text = editor.Document.Text;
-        var (start, end) = IdentifierRunAt(text, editor.CaretOffset);
-        return end > start ? text.Substring(start, end - start) : null;
-    }
-
-    /// <summary>A classification is ineligible for symbol actions when it names a keyword, string, comment,
-    /// number, operator, punctuation, excluded, or whitespace kind. Substring matching covers Roslyn's
-    /// dotted variants ("keyword - control", "string - verbatim", "xml doc comment - text", …). A null
-    /// classification (no covering span) is treated as eligible — the identifier-char gate still applies.</summary>
-    private static bool IsDeniedClassification(string? cls)
-    {
-        if (cls is null) return false;
-        return cls.Contains("keyword") || cls.Contains("string") || cls.Contains("comment")
-            || cls.Contains("number") || cls.Contains("operator") || cls.Contains("punctuation")
-            || cls.Contains("excluded") || cls.Contains("whitespace");
-    }
-
-    private static string Ellipsize(string s) => s.Length <= 30 ? s : s.Substring(0, 30) + "…";
-
-    private RoslynColorizer? ColorizerFor(TextEditor editor) => _codeEditors.StateFor(editor)?.Colorizer;
 
     private void OnCodeCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         if (sender is not ContextMenu cm) return;
-        MenuItem? search = null, findUsages = null, goToDef = null;
+
+        var editor = FindActiveEditor();
+        var context = CodeSymbolContext.At(editor, _codeEditors.StateFor(editor));
+        var canSearch = Vm.Solution.SolutionPath is not null && !string.IsNullOrEmpty(context.Term);
+
         foreach (var item in cm.Items)
             if (item is MenuItem mi)
                 switch (mi.Name)
                 {
-                    case "CtxSearchItem": search = mi; break;
-                    case "CtxFindUsagesItem": findUsages = mi; break;
-                    case "CtxGoToDefItem": goToDef = mi; break;
+                    case "CtxSearchItem":
+                        mi.IsEnabled = canSearch;
+                        mi.Header = context.SearchHeader;
+                        break;
+                    case "CtxFindUsagesItem":
+                    case "CtxGoToDefItem":
+                        mi.IsEnabled = context.SymbolEligible;
+                        break;
                 }
-
-        var editor = FindActiveEditor();
-        var tab = editor?.DataContext as EditorTabViewModel;
-
-        // Search: enabled when a solution is loaded and a term (selection or word) exists.
-        var term = editor is null ? null : TermAt(editor);
-        if (search is not null)
-        {
-            search.IsEnabled = Vm.Solution.SolutionPath is not null && !string.IsNullOrEmpty(term);
-            search.Header = string.IsNullOrEmpty(term) ? "Search solution" : $"Search solution for \"{Ellipsize(term)}\"";
-        }
-
-        // Symbol actions: C# tab, identifier char under the caret, non-denied classification.
-        var symbolEligible = false;
-        if (editor is not null && tab is not null && tab.Mode == HighlightMode.CSharp)
-        {
-            var offset = editor.CaretOffset;
-            var text = editor.Document.Text;
-            if (offset >= 0 && offset < text.Length && IsIdentifierChar(text[offset]))
-                symbolEligible = !IsDeniedClassification(ColorizerFor(editor)?.ClassificationAt(offset));
-        }
-        if (findUsages is not null) findUsages.IsEnabled = symbolEligible;
-        if (goToDef is not null) goToDef.IsEnabled = symbolEligible;
     }
 
     private void OnCtxSearchClick(object? sender, RoutedEventArgs e) => TrySearchTermInEditor();
@@ -426,8 +370,7 @@ public partial class MainWindow : Window
     private bool TrySearchTermInEditor()
     {
         var editor = FindActiveEditor();
-        if (editor is null) return false;
-        var term = TermAt(editor);
+        var term = CodeSymbolContext.At(editor, _codeEditors.StateFor(editor)).Term;
         if (string.IsNullOrEmpty(term) || Vm.Solution.SolutionPath is null) return false;
         Vm.Find.UseRegex = false; // clicked word is a literal query — avoid regex-metacharacter surprises
         Vm.Find.Query = term;
@@ -436,8 +379,8 @@ public partial class MainWindow : Window
         return true;
     }
 
-    // The context-menu caret already sits on the clicked token (OnEditorPointerPressed), so these
-    // resolve against the same offset as the F12 / Shift+F12 shortcuts.
+    // The context-menu caret already sits on the clicked token (TabEditorBinder), so these resolve against
+    // the same offset as the F12 / Shift+F12 shortcuts.
     private async void OnCtxFindUsagesClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
     private async void OnCtxGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();

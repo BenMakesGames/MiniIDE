@@ -43,8 +43,11 @@ public abstract partial class TabViewModelBase : ViewModelBase
     /// the same file always dedups to one tab regardless of how the path was spelled.</summary>
     public static string FileId(string path) => "file:" + Path.GetFullPath(path).ToLowerInvariant();
 
-    public static TabViewModelBase CreateForFile(string path) =>
+    /// <summary>Reads <paramref name="path"/> and builds the tab that can show it. Async because the read is
+    /// real I/O — the tab types take their already-loaded content, so there is no constructor that blocks the
+    /// UI thread on the disk. Throws if the file can't be read; the caller decides how to surface that.</summary>
+    public static async Task<TabViewModelBase> CreateForFileAsync(string path) =>
         Path.GetExtension(path).ToFileKind().GetInfo().OpensAsImageTab
             ? new ImageTabViewModel(path)
-            : new EditorTabViewModel(path);
+            : new EditorTabViewModel(path, await File.ReadAllTextAsync(path));
 }

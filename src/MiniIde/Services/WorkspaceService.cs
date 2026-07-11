@@ -11,12 +11,17 @@ using MiniIde.Models;
 
 namespace MiniIde.Services;
 
+/// <summary>The Roslyn semantic layer: go-to-definition, find-references, and compiler diagnostics.
+///
+/// <para>All reads go through the private <see cref="_solution"/> snapshot, never
+/// <c>_ws.CurrentSolution</c>. That is deliberate and load-bearing — it lets <see cref="SyncDocumentsAsync"/>
+/// overlay unsaved editor buffers by forking the immutable snapshot in memory, with no way for an edit to
+/// reach the disk.</para></summary>
 public class WorkspaceService : IDisposable
 {
     private MSBuildWorkspace? _ws;
     private Solution? _solution;
     private readonly SemaphoreSlim _lock = new(1, 1);
-    public bool IsLoaded => _solution is not null;
     public event Action<string>? Progress;
 
     public async Task EnsureLoadedAsync(string solutionPath, CancellationToken ct = default)
@@ -36,110 +41,138 @@ public class WorkspaceService : IDisposable
         finally { _lock.Release(); }
     }
 
-    public async Task<(string File, int Line, int Column)?> GoToDefinitionAsync(
+    /// <summary>Overlays unsaved editor buffers onto the solution snapshot so semantic queries see what the
+    /// user is actually looking at. Without this, every query resolves against the on-disk text: once an edit
+    /// shifts offsets, go-to-definition silently lands on the wrong symbol.
+    ///
+    /// <para>This forks <see cref="_solution"/> in memory and <b>never</b> calls
+    /// <c>MSBuildWorkspace.TryApplyChanges</c>, which persists the new text to disk — i.e. would silently
+    /// autosave the user's file behind their back, destroying the unsaved-buffer model outright.</para>
+    ///
+    /// <para>Cheap by construction: <c>WithDocumentText</c> is lazy — it re-uses the snapshot structurally and
+    /// merely marks the project's compilation stale (measured at ~0.3ms per call, no parse, no compile). The
+    /// re-bind is paid by the next semantic query, all of which are explicitly user-initiated (F12, Shift+F12,
+    /// Problems refresh) and already slow enough to show status. Nothing runs in the background.</para>
+    ///
+    /// <para>Documents whose text already matches are skipped: re-applying identical text would still
+    /// invalidate the cached compilation and turn a ~16ms warm query back into a ~700ms cold one.</para></summary>
+    /// <param name="buffers">Unsaved editor buffers, as (absolute path, current text). Must be snapshotted by
+    /// the caller — AvaloniaEdit's <c>TextDocument</c> is thread-affine, this method is not.</param>
+    public async Task SyncDocumentsAsync(
+        IReadOnlyList<(string Path, string Text)> buffers, CancellationToken ct = default)
+    {
+        if (_solution is null || buffers.Count == 0) return;
+        foreach (var (path, text) in buffers)
+        {
+            ct.ThrowIfCancellationRequested();
+            var doc = FindDocument(path);
+            if (doc is null) continue; // open file that isn't part of the solution (e.g. a .md)
+            var updated = SourceText.From(text);
+            var current = await doc.GetTextAsync(ct);
+            if (current.ContentEquals(updated)) continue;
+            _solution = _solution.WithDocumentText(doc.Id, updated);
+        }
+    }
+
+    public async Task<SourceLocation?> GoToDefinitionAsync(
         string filePath, int position, CancellationToken ct = default)
     {
-        var doc = FindDocument(filePath);
-        if (doc is null) return null;
-        var model = await doc.GetSemanticModelAsync(ct);
-        if (model is null) return null;
-        var root = await doc.GetSyntaxRootAsync(ct);
-        if (root is null) return null;
-        var token = root.FindToken(position);
-        var symbol = model.GetSymbolInfo(token.Parent!, ct).Symbol
-            ?? model.GetDeclaredSymbol(token.Parent!, ct);
+        var symbol = await ResolveSymbolAsync(filePath, position, ct);
         if (symbol is null) return null;
         var def = await SymbolFinder.FindSourceDefinitionAsync(symbol, _solution!, ct) ?? symbol;
         var loc = def.Locations.Length > 0 ? def.Locations[0] : null;
         if (loc is null || !loc.IsInSource) return null;
-        var line = loc.GetLineSpan();
-        return (loc.SourceTree!.FilePath, line.StartLinePosition.Line + 1, line.StartLinePosition.Character + 1);
+        return ToSourceLocation(loc.SourceTree!.FilePath, loc.GetLineSpan());
     }
 
     /// <summary>
-    /// Returns the symbol's reference locations (possibly empty when the symbol has zero references),
-    /// or <c>null</c> when no symbol resolves at <paramref name="position"/>. Callers use the null case
-    /// to distinguish a genuine "no symbol here" from a legitimate "symbol found, zero references."
+    /// Returns the symbol's references (possibly empty when the symbol has none), or <c>null</c> when no
+    /// symbol resolves at <paramref name="position"/>. Callers use the null case to distinguish a genuine
+    /// "no symbol here" from a legitimate "symbol found, zero references."
     /// </summary>
-    public async Task<IReadOnlyList<(string File, int Line, int Column, string Preview)>?> FindReferencesAsync(
+    public async Task<IReadOnlyList<FindHit>?> FindReferencesAsync(
         string filePath, int position, CancellationToken ct = default)
     {
-        var results = new List<(string, int, int, string)>();
+        var symbol = await ResolveSymbolAsync(filePath, position, ct);
+        if (symbol is null) return null;
+
+        var results = new List<FindHit>();
+        foreach (var reference in await SymbolFinder.FindReferencesAsync(symbol, _solution!, ct))
+            foreach (var loc in reference.Locations)
+            {
+                var span = loc.Location.GetLineSpan();
+                var text = await loc.Document.GetTextAsync(ct);
+                var lineText = text.Lines[span.StartLinePosition.Line].ToString();
+                results.Add(new FindHit(
+                    ToSourceLocation(loc.Location.SourceTree!.FilePath, span), lineText.Trim()));
+            }
+        return results;
+    }
+
+    /// <summary>The symbol referenced or declared at <paramref name="position"/>, or null when the file isn't
+    /// in the solution or nothing resolves there. Shared by both symbol queries so they cannot disagree about
+    /// what "the symbol under the caret" means.</summary>
+    private async Task<ISymbol?> ResolveSymbolAsync(string filePath, int position, CancellationToken ct)
+    {
         var doc = FindDocument(filePath);
         if (doc is null) return null;
         var model = await doc.GetSemanticModelAsync(ct);
         var root = await doc.GetSyntaxRootAsync(ct);
         if (model is null || root is null) return null;
-        var token = root.FindToken(position);
-        var symbol = model.GetSymbolInfo(token.Parent!, ct).Symbol
-            ?? model.GetDeclaredSymbol(token.Parent!, ct);
-        if (symbol is null) return null;
-        var refs = await SymbolFinder.FindReferencesAsync(symbol, _solution!, ct);
-        foreach (var r in refs)
-        {
-            foreach (var loc in r.Locations)
-            {
-                var span = loc.Location.GetLineSpan();
-                var text = await loc.Document.GetTextAsync(ct);
-                var lineText = text.Lines[span.StartLinePosition.Line].ToString();
-                results.Add((loc.Location.SourceTree!.FilePath, span.StartLinePosition.Line + 1,
-                    span.StartLinePosition.Character + 1, lineText.Trim()));
-            }
-        }
-        return results;
+        var parent = root.FindToken(position).Parent;
+        if (parent is null) return null;
+        return model.GetSymbolInfo(parent, ct).Symbol ?? model.GetDeclaredSymbol(parent, ct);
     }
 
     /// <summary>
     /// Compiles every project in the loaded solution and returns its Error + Warning compiler diagnostics as
     /// <see cref="ProblemItem"/>s. Info/Hidden and pragma-suppressed diagnostics are excluded; duplicates
-    /// (same id+file+line+column+message, e.g. from a multi-targeted project's per-TFM compilations) are
+    /// (same id+severity+message+location, e.g. from a multi-targeted project's per-TFM compilations) are
     /// collapsed. Returns empty when no solution is loaded. Compilation is the expensive step and may be slow
     /// on a first, cold load — it runs off the UI thread, honors <paramref name="ct"/> between projects, and
     /// reports per-project progress via the <see cref="Progress"/> event.
     /// </summary>
-    public async Task<IReadOnlyList<ProblemItem>> GetDiagnosticsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<ProblemItem>> GetDiagnosticsAsync(CancellationToken ct = default)
     {
-        if (_solution is null) return System.Array.Empty<ProblemItem>();
-        var results = new List<ProblemItem>();
-        // ProblemItem is a record: structural equality already defines "the same diagnostic", so the
-        // set does the de-duplication with no hand-rolled key to keep in sync with the record's fields.
-        var seen = new HashSet<ProblemItem>();
-        foreach (var project in _solution.Projects)
+        var solution = _solution;
+        if (solution is null) return Task.FromResult<IReadOnlyList<ProblemItem>>(System.Array.Empty<ProblemItem>());
+
+        // Task.Run, not a bare async method: Roslyn's GetCompilationAsync does its binding work on the calling
+        // thread, so awaiting it from the UI thread freezes the window for the whole analysis — and, worse,
+        // the Progress posts it queues can only be pumped once the loop finishes, so they land *after* the
+        // caller's final "N errors, M warnings" and overwrite it. Getting off the UI thread fixes both.
+        return Task.Run<IReadOnlyList<ProblemItem>>(async () =>
         {
-            ct.ThrowIfCancellationRequested();
-            Progress?.Invoke($"Analyzing {project.Name}");
-            var compilation = await project.GetCompilationAsync(ct);
-            if (compilation is null) continue;
-            foreach (var diag in compilation.GetDiagnostics(ct))
+            var results = new List<ProblemItem>();
+            // ProblemItem is a record: structural equality already defines "the same diagnostic", so the
+            // set does the de-duplication with no hand-rolled key to keep in sync with the record's fields.
+            var seen = new HashSet<ProblemItem>();
+            foreach (var project in solution.Projects)
             {
-                if (diag.IsSuppressed) continue;
-                if (diag.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
-
-                var severity = diag.Severity == DiagnosticSeverity.Error ? ProblemSeverity.Error : ProblemSeverity.Warning;
-                string? file = null;
-                int line = 0, column = 0;
-                if (diag.Location.IsInSource)
+                ct.ThrowIfCancellationRequested();
+                Progress?.Invoke($"Analyzing {project.Name}");
+                var compilation = await project.GetCompilationAsync(ct);
+                if (compilation is null) continue;
+                foreach (var diag in compilation.GetDiagnostics(ct))
                 {
-                    var span = diag.Location.GetLineSpan();
-                    file = diag.Location.SourceTree!.FilePath;
-                    line = span.StartLinePosition.Line + 1;
-                    column = span.StartLinePosition.Character + 1;
+                    if (diag.IsSuppressed) continue;
+                    if (diag.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
+
+                    var severity = diag.Severity == DiagnosticSeverity.Error ? ProblemSeverity.Error : ProblemSeverity.Warning;
+                    var location = diag.Location.IsInSource
+                        ? ToSourceLocation(diag.Location.SourceTree!.FilePath, diag.Location.GetLineSpan())
+                        : null;
+                    var item = new ProblemItem(diag.Id, severity, diag.GetMessage(), location);
+                    if (seen.Add(item)) results.Add(item);
                 }
-                var item = new ProblemItem(diag.Id, severity, diag.GetMessage(), file, line, column);
-                if (seen.Add(item)) results.Add(item);
             }
-        }
-        return results;
+            return results;
+        }, ct);
     }
 
-    public void UpdateDocumentText(string filePath, string text)
-    {
-        if (_solution is null || _ws is null) return;
-        var doc = FindDocument(filePath);
-        if (doc is null) return;
-        var updated = _solution.WithDocumentText(doc.Id, SourceText.From(text));
-        if (_ws.TryApplyChanges(updated)) _solution = _ws.CurrentSolution;
-    }
+    // The one place Roslyn's 0-based LinePosition becomes a 1-based, editor-facing SourceLocation.
+    private static SourceLocation ToSourceLocation(string file, FileLinePositionSpan span) =>
+        new(file, span.StartLinePosition.Line + 1, span.StartLinePosition.Character + 1);
 
     private Document? FindDocument(string filePath)
     {

@@ -12,26 +12,31 @@ namespace MiniIde.Views;
 internal class RoslynColorizer : DocumentColorizingTransformer
 {
     private readonly Func<string, Task<IReadOnlyList<ClassifiedSpan>>> _classify;
-    private IReadOnlyList<ClassifiedSpan> _spans = System.Array.Empty<ClassifiedSpan>();
+    private IReadOnlyList<ClassifiedSpan> _spans = Array.Empty<ClassifiedSpan>();
 
     public RoslynColorizer(Func<string, Task<IReadOnlyList<ClassifiedSpan>>> classify) { _classify = classify; }
 
     public async Task RefreshAsync(string source)
     {
         try { _spans = await _classify(source); }
-        catch { _spans = System.Array.Empty<ClassifiedSpan>(); }
+        catch { _spans = Array.Empty<ClassifiedSpan>(); }
     }
 
-    public void Clear() => _spans = System.Array.Empty<ClassifiedSpan>();
+    public void Clear() => _spans = Array.Empty<ClassifiedSpan>();
 
-    /// <summary>The classification of the cached span covering <paramref name="offset"/>, or null if none.
-    /// Reads the existing span cache synchronously — no reclassification.</summary>
-    public string? ClassificationAt(int offset)
+    /// <summary>Every cached classification covering <paramref name="offset"/> — empty when the document
+    /// hasn't been classified yet. Reads the existing span cache synchronously, no reclassification.
+    ///
+    /// <para>All of them, not the first: Roslyn layers additive classifications over the semantic one (a
+    /// static field is both "field name" and "static symbol"), so a single-span answer would be a coin flip.
+    /// See <see cref="SymbolClassifications.AllowSymbolActions"/>.</para></summary>
+    public IReadOnlyList<string> ClassificationsAt(int offset)
     {
+        List<string>? covering = null;
         foreach (var span in _spans)
             if (offset >= span.TextSpan.Start && offset < span.TextSpan.End)
-                return span.ClassificationType;
-        return null;
+                (covering ??= []).Add(span.ClassificationType);
+        return covering ?? (IReadOnlyList<string>)Array.Empty<string>();
     }
 
     protected override void ColorizeLine(DocumentLine line)
@@ -82,4 +87,5 @@ internal class RoslynColorizer : DocumentColorizingTransformer
         ClassificationTypeNames.NamespaceName => NamespaceBrush,
         _ => null
     };
+
 }

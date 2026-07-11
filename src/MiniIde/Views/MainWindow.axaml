@@ -169,6 +169,8 @@
                                 </ae:TextEditor.ContextMenu>
                             </ae:TextEditor>
                         </DataTemplate>
+                        <!-- Same three handlers as the code template: each binder ignores editors showing the
+                             other kind of tab, so the window needs one handler trio, not one per kind. -->
                         <DataTemplate DataType="vm:OutputTabViewModel">
                             <ae:TextEditor IsReadOnly="True"
                                            ShowLineNumbers="False"
@@ -177,9 +179,9 @@
                                            FontSize="13"
                                            Background="#000000"
                                            Foreground="#DCDCDC"
-                                           AttachedToVisualTree="OnOutputEditorAttached"
-                                           DataContextChanged="OnOutputEditorDataContextChanged"
-                                           DetachedFromVisualTree="OnOutputEditorDetached"/>
+                                           AttachedToVisualTree="OnEditorAttached"
+                                           DataContextChanged="OnEditorDataContextChanged"
+                                           DetachedFromVisualTree="OnEditorDetached"/>
                         </DataTemplate>
                         <DataTemplate DataType="vm:ImageTabViewModel">
                             <Grid Background="#1E1E22">
@@ -216,7 +218,7 @@
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="m:FindHit">
                                         <TextBlock>
-                                            <Run Text="{Binding File}"/><Run Text=":"/><Run Text="{Binding Line}"/><Run Text=" — "/><Run Text="{Binding Preview}"/>
+                                            <Run Text="{Binding Location.File}"/><Run Text=":"/><Run Text="{Binding Location.Line}"/><Run Text=" — "/><Run Text="{Binding Preview}"/>
                                         </TextBlock>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>

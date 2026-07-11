@@ -20,6 +20,6 @@ public class SearchService
             SkipDirectory: static path => IdeDirectories.Pruned.Contains(Path.GetFileName(path)));
 
         await foreach (var hit in _grepper.GrepAsync(root, query, options, ct))
-            yield return new FindHit(hit.File, hit.Line, hit.Column, hit.Preview);
+            yield return new FindHit(new SourceLocation(hit.File, hit.Line, hit.Column), hit.Preview);
     }
 }

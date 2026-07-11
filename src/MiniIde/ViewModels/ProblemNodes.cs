@@ -43,7 +43,6 @@ public sealed class ProblemLeaf
 
     public ProblemItem Item { get; }
     public string Display { get; }
-    public bool HasLocation => Item.HasLocation;
     public string Glyph => Item.Severity == ProblemSeverity.Error ? "⛔" : "⚠";
     public IBrush IconColor => Item.Severity == ProblemSeverity.Error ? ErrorBrush : WarningBrush;
 }

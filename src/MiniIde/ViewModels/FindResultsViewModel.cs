@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,11 +11,14 @@ using MiniIde.Services;
 
 namespace MiniIde.ViewModels;
 
+/// <summary>The Find panel. Owns its own results and status — it is filled either by a text search it runs
+/// itself (<see cref="SearchAsync"/>) or by find-references handing it hits (<see cref="ShowReferences"/>).
+/// Both produce <see cref="FindHit"/>s, so the panel never learns which one it is showing.</summary>
 public partial class FindResultsViewModel : ViewModelBase
 {
     private readonly SearchService _search;
     private readonly SolutionService _sln;
-    private readonly Func<string, int, int, Task> _openHit;
+    private readonly Func<SourceLocation, Task> _openHit;
     private CancellationTokenSource? _cts;
 
     [ObservableProperty] private string _query = "";
@@ -25,13 +29,29 @@ public partial class FindResultsViewModel : ViewModelBase
 
     public ObservableCollection<FindHit> Results { get; } = new();
 
-    public FindResultsViewModel(SearchService search, SolutionService sln, Func<string, int, int, Task> openHit)
+    public FindResultsViewModel(SearchService search, SolutionService sln, Func<SourceLocation, Task> openHit)
     { _search = search; _sln = sln; _openHit = openHit; }
 
     partial void OnSelectedChanged(FindHit? value)
     {
         if (value is null) return;
-        _ = _openHit(value.File, value.Line, value.Column);
+        _ = _openHit(value.Location);
+    }
+
+    /// <summary>Replaces the panel's contents with reference results. The one entry point for find-references
+    /// — the view never touches <see cref="Results"/> or <see cref="Status"/> itself.</summary>
+    public void ShowReferences(IReadOnlyList<FindHit> references)
+    {
+        Results.Clear();
+        foreach (var r in references) Results.Add(r);
+        Status = Plural.Of(references.Count, "reference");
+    }
+
+    /// <summary>Clears the panel and explains why — used when no symbol resolves under the caret.</summary>
+    public void ShowNoResults(string status)
+    {
+        Results.Clear();
+        Status = status;
     }
 
     [RelayCommand]
@@ -48,7 +68,7 @@ public partial class FindResultsViewModel : ViewModelBase
         {
             await foreach (var hit in _search.SearchAsync(root, Query, UseRegex, _cts.Token))
                 Dispatcher.UIThread.Post(() => Results.Add(hit));
-            Status = $"{Results.Count} match(es)";
+            Status = Plural.Of(Results.Count, "match", "es");
         }
         catch (OperationCanceledException) { Status = "Canceled"; }
         catch (Exception ex) { Status = ex.Message; }

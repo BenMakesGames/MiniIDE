@@ -1,22 +1,21 @@
 using System.IO;
 using System.Threading.Tasks;
 using AvaloniaEdit.Document;
-using CommunityToolkit.Mvvm.ComponentModel;
 using MiniIde.Models;
 
 namespace MiniIde.ViewModels;
 
-public partial class EditorTabViewModel : DocumentTabViewModel
+/// <summary>A file-backed code tab. Construct via <see cref="TabViewModelBase.CreateForFileAsync"/> — the
+/// content is read off the UI thread and handed in, so nothing here blocks on the disk.</summary>
+public class EditorTabViewModel : DocumentTabViewModel
 {
     public HighlightMode Mode { get; }
 
-    [ObservableProperty] private int _caretOffset;
-
-    public EditorTabViewModel(string filePath)
-        : base(FileId(filePath), filePath, new TextDocument(File.ReadAllText(filePath)))
+    internal EditorTabViewModel(string filePath, string content)
+        : base(FileId(filePath), filePath, new TextDocument(content))
     {
         Mode = Path.GetExtension(filePath).ToFileKind().GetInfo().Highlight;
-        Document.TextChanged += (_, _) => { IsDirty = true; OnPropertyChanged(nameof(Header)); };
+        Document.TextChanged += (_, _) => IsDirty = true;
     }
 
     public override async Task SaveAsync()

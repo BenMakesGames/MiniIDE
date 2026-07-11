@@ -13,6 +13,17 @@ using MiniIde.ViewModels;
 
 namespace MiniIde.Views;
 
+/// <summary>The non-generic face of a binder, so the window can hold a list of them and route the three
+/// editor lifecycle events to all of them without knowing their tab or state types. Each binder is a no-op
+/// for an editor showing another kind of tab, so "offer it to every binder" is correct by construction —
+/// this is a merged <em>dispatch</em>, not a merged registry (see <see cref="TabEditorBinder{TTab,TState}"/>,
+/// which explains why the registries must stay separate).</summary>
+internal interface ITabEditorBinder
+{
+    void Bind(TextEditor editor);
+    void Unbind(TextEditor editor);
+}
+
 /// <summary>Owns the imperative <see cref="TextEditor"/> ↔ <see cref="DocumentTabViewModel"/> binding for
 /// one kind of tab. <c>TextEditor.Document</c> is a CLR property, not an <c>AvaloniaProperty</c>, so it
 /// cannot be bound in XAML (see docs/avaloniaedit.md) — the view must assign it, and a <c>TabControl</c>
@@ -33,7 +44,7 @@ namespace MiniIde.Views;
 /// <param name="attachTab">Wires a tab's document into the control; returns the action that unwires it.</param>
 internal sealed class TabEditorBinder<TTab, TState>(
     Func<TextEditor, (TState State, Action TearDown)> setUpControl,
-    Func<TextEditor, TState, TTab, Action> attachTab)
+    Func<TextEditor, TState, TTab, Action> attachTab) : ITabEditorBinder
     where TTab : DocumentTabViewModel
     where TState : class
 {
@@ -91,15 +102,8 @@ internal sealed class TabEditorBinder<TTab, TState>(
     }
 
     /// <summary>The per-control state <paramref name="editor"/> was set up with, or null if unbound.</summary>
-    public TState? StateFor(TextEditor editor) => _bindings.TryGetValue(editor, out var b) ? b.State : null;
-}
-
-/// <summary>Per-control state of a code editor: the colorizer living in its <c>LineTransformers</c>. Kept
-/// reachable so the context menu can read cached classifications (<see cref="RoslynColorizer.ClassificationAt"/>)
-/// without re-running the classifier.</summary>
-internal sealed class CodeEditorState(RoslynColorizer colorizer)
-{
-    public RoslynColorizer Colorizer { get; } = colorizer;
+    public TState? StateFor(TextEditor? editor) =>
+        editor is not null && _bindings.TryGetValue(editor, out var b) ? b.State : null;
 }
 
 /// <summary>Per-control state of an output editor: whether the view sat at the bottom immediately before
@@ -115,43 +119,41 @@ internal static class TabEditorBinder
 {
     private const int HighlightDebounceMs = 200;
 
-    public static TabEditorBinder<EditorTabViewModel, CodeEditorState> ForCodeTabs(
+    /// <summary>A code editor's per-control state is just its colorizer — kept reachable so the context menu
+    /// can read cached classifications without re-running the classifier.</summary>
+    public static TabEditorBinder<EditorTabViewModel, RoslynColorizer> ForCodeTabs(
         Func<string, Task<IReadOnlyList<ClassifiedSpan>>> classify)
         => new(editor => SetUpCodeEditor(editor, classify), AttachCodeTab);
 
     public static TabEditorBinder<OutputTabViewModel, OutputEditorState> ForOutputTabs()
         => new(SetUpOutputEditor, AttachOutputTab);
 
-    // ── Code tabs: colorizer + debounced reclassify + caret tracking + right-click caret placement ──
+    // ── Code tabs: colorizer + debounced reclassify + right-click caret placement ──
 
-    private static (CodeEditorState State, Action TearDown) SetUpCodeEditor(
+    private static (RoslynColorizer State, Action TearDown) SetUpCodeEditor(
         TextEditor editor, Func<string, Task<IReadOnlyList<ClassifiedSpan>>> classify)
     {
         editor.Options.ConvertTabsToSpaces = true;
         editor.Options.IndentationSize = 4;
+        // Navigating from a find hit / problem / go-to-def scrolls the view; without a highlighted caret line
+        // there's nothing to tell you *which* line it landed on.
+        editor.Options.HighlightCurrentLine = true;
 
         var colorizer = new RoslynColorizer(classify);
         editor.TextArea.TextView.LineTransformers.Add(colorizer);
-
-        EventHandler onCaretMoved = (_, _) =>
-        {
-            if (editor.DataContext is EditorTabViewModel tab) tab.CaretOffset = editor.CaretOffset;
-        };
-        editor.TextArea.Caret.PositionChanged += onCaretMoved;
 
         // Tunnel so we place the caret before AvaloniaEdit's own pointer logic and before the menu opens.
         EventHandler<PointerPressedEventArgs> onPointerPressed = OnEditorPointerPressed;
         editor.AddHandler(InputElement.PointerPressedEvent, onPointerPressed, RoutingStrategies.Tunnel);
 
-        return (new CodeEditorState(colorizer), () =>
+        return (colorizer, () =>
         {
             editor.TextArea.TextView.LineTransformers.Remove(colorizer);
-            editor.TextArea.Caret.PositionChanged -= onCaretMoved;
             editor.RemoveHandler(InputElement.PointerPressedEvent, onPointerPressed);
         });
     }
 
-    private static Action AttachCodeTab(TextEditor editor, CodeEditorState state, EditorTabViewModel tab)
+    private static Action AttachCodeTab(TextEditor editor, RoslynColorizer colorizer, EditorTabViewModel tab)
     {
         var document = tab.Document;
         CancellationTokenSource? debounceCts = null;
@@ -164,12 +166,12 @@ internal static class TabEditorBinder
             debounceCts?.Dispose();
             var cts = new CancellationTokenSource();
             debounceCts = cts;
-            _ = DebouncedRefreshAsync(state.Colorizer, editor, tab.Mode, cts.Token);
+            _ = DebouncedRefreshAsync(colorizer, editor, tab.Mode, cts.Token);
         };
         document.TextChanged += onTextChanged;
 
         // Initial highlight of the newly-shown document is immediate, not debounced.
-        _ = RefreshAndRedraw(state.Colorizer, editor, tab.Mode);
+        _ = RefreshAndRedraw(colorizer, editor, tab.Mode);
 
         return () =>
         {
@@ -231,7 +233,7 @@ internal static class TabEditorBinder
         editor.CaretOffset = offset;
     }
 
-    // ── Output tabs: tail-follow only. Read-only, no colorizer, no caret tracking. ──
+    // ── Output tabs: tail-follow only. Read-only, no colorizer. ──
 
     private static (OutputEditorState State, Action TearDown) SetUpOutputEditor(TextEditor editor)
         => (new OutputEditorState(), () => { });

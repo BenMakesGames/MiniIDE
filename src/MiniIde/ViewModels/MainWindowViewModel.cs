@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -36,7 +38,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public string WindowTitle => Solution.SolutionPath is null ? "MiniIDE" : $"{SolutionName} - MiniIDE";
 
-    public event Func<string, int, int, Task>? RequestOpen;
+    /// <summary>Raised to ask the view to reveal a location — open its file, place the caret, scroll, focus.
+    /// The view owns that because only it has the realized editor; every navigation source (find results,
+    /// problems, go-to-definition) funnels through here rather than reaching into the editor itself.</summary>
+    public event Func<SourceLocation, Task>? RequestOpen;
 
     public MainWindowViewModel()
     {
@@ -48,16 +53,12 @@ public partial class MainWindowViewModel : ViewModelBase
         Shell = new ShellService();
         Highlight = new SyntaxHighlightService();
         Workspace.Progress += m => Dispatcher.UIThread.Post(() => Status = m);
-        Find = new FindResultsViewModel(Search, Solution, async (f, l, c) =>
-        {
-            if (RequestOpen is not null) await RequestOpen(f, l, c);
-        });
-        Problems = new ProblemsViewModel(Workspace, Solution, async (f, l, c) =>
-        {
-            if (RequestOpen is not null) await RequestOpen(f, l, c);
-        });
+        Find = new FindResultsViewModel(Search, Solution, OpenAsync);
+        Problems = new ProblemsViewModel(Workspace, Solution, EnsureWorkspaceReadyAsync, OpenAsync);
         NuGetVm = new NuGetViewModel(NuGet, ResolveNuGetOutput);
     }
+
+    private Task OpenAsync(SourceLocation location) => RequestOpen?.Invoke(location) ?? Task.CompletedTask;
 
     /// <summary>Gets-or-creates the shared <c>NuGet - Output</c> tab and activates it. Keeps
     /// <see cref="NuGetViewModel"/> ignorant of tab mechanics (Open Decision #3). The fixed <c>nuget:</c>
@@ -89,25 +90,28 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { Status = ex.Message; }
     }
 
-    private static ProjectEntry? PickDefaultStartup(System.Collections.Generic.IReadOnlyList<ProjectEntry> projects)
+    private static ProjectEntry? PickDefaultStartup(IReadOnlyList<ProjectEntry> projects)
     {
         foreach (var e in projects) if (e.IsRunnable) return e;
         return projects.Count > 0 ? projects[0] : null;
     }
 
-    public async Task OpenFileAsync(string path, int line = 1, int col = 1)
+    /// <summary>Opens (or re-activates) the tab for <paramref name="path"/>. Genuinely async: the file read
+    /// happens off the UI thread. A file that can't be read reports to the status bar rather than throwing
+    /// into an <c>async void</c> event handler and taking the app down.</summary>
+    public async Task OpenFileAsync(string path)
     {
         var id = TabViewModelBase.FileId(path);
-        TabViewModelBase? tab = null;
-        foreach (var t in Tabs) if (t.TabId == id) { tab = t; break; }
-        if (tab is null)
-        {
-            tab = TabViewModelBase.CreateForFile(path);
-            tab.RequestClose += CloseTabAsync;
-            Tabs.Add(tab);
-        }
+        var existing = Tabs.FirstOrDefault(t => t.TabId == id);
+        if (existing is not null) { ActiveTab = existing; return; }
+
+        TabViewModelBase tab;
+        try { tab = await TabViewModelBase.CreateForFileAsync(path); }
+        catch (Exception ex) { Status = $"Could not open {Path.GetFileName(path)}: {ex.Message}"; return; }
+
+        tab.RequestClose += CloseTabAsync;
+        Tabs.Add(tab);
         ActiveTab = tab;
-        await Task.CompletedTask;
     }
 
     /// <summary>Reuses the existing output tab with this identity, or creates one (appended at the end,
@@ -115,7 +119,8 @@ public partial class MainWindowViewModel : ViewModelBase
     /// never the header, so two output tabs can share a title while staying distinct.</summary>
     private OutputTabViewModel GetOrCreateOutputTab(string tabId, string header)
     {
-        foreach (var t in Tabs) if (t is OutputTabViewModel o && o.TabId == tabId) return o;
+        var existing = Tabs.OfType<OutputTabViewModel>().FirstOrDefault(t => t.TabId == tabId);
+        if (existing is not null) return existing;
         var tab = new OutputTabViewModel(tabId, header);
         tab.RequestClose += CloseTabAsync;
         Tabs.Add(tab);
@@ -162,30 +167,54 @@ public partial class MainWindowViewModel : ViewModelBase
         StopCommand.NotifyCanExecuteChanged();
     }
 
-    public async Task<(string, int, int)?> GoToDefinitionAsync(string file, int position)
+    // ── Semantic queries ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Brings the Roslyn workspace up to date with what the user is actually looking at: loads it if
+    /// needed, then overlays every unsaved editor buffer. Every semantic query goes through this — skipping it
+    /// means resolving against the on-disk text, which after any length-changing edit silently returns
+    /// positions for the wrong symbol.
+    ///
+    /// <para>The buffers are snapshotted <b>before</b> the first await, on the caller's thread: AvaloniaEdit's
+    /// <c>TextDocument.Text</c> is thread-affine and every caller here originates on the UI thread.</para></summary>
+    private async Task EnsureWorkspaceReadyAsync(CancellationToken ct = default)
     {
-        if (Solution.SolutionPath is null) return null;
-        Status = "Loading workspace (first use may take a while)...";
-        await Workspace.EnsureLoadedAsync(Solution.SolutionPath);
-        Status = "Resolving...";
-        var result = await Workspace.GoToDefinitionAsync(file, position);
-        Status = result is null ? "No definition found" : "Done";
-        return result;
+        if (Solution.SolutionPath is null) return;
+        var buffers = UnsavedBuffers();
+        await Workspace.EnsureLoadedAsync(Solution.SolutionPath, ct);
+        await Workspace.SyncDocumentsAsync(buffers, ct);
     }
 
-    /// <summary>
-    /// Returns reference locations (possibly empty), or <c>null</c> when no symbol resolves at the position.
-    /// The null case sets a "No symbol found" status; callers use it to skip populating results.
-    /// </summary>
-    public async Task<System.Collections.Generic.IReadOnlyList<(string, int, int, string)>?> FindReferencesAsync(string file, int position)
+    private List<(string Path, string Text)> UnsavedBuffers() =>
+        Tabs.OfType<EditorTabViewModel>()
+            .Where(t => t.IsDirty && t.FilePath is not null)
+            .Select(t => (t.FilePath!, t.Document.Text))
+            .ToList();
+
+    /// <summary>Navigates to the definition of the symbol at <paramref name="caretOffset"/>, reporting the
+    /// outcome to the status bar. Owns the whole flow — the view supplies the caret and nothing else.</summary>
+    public async Task GoToDefinitionAsync(string file, int caretOffset)
     {
-        if (Solution.SolutionPath is null) return System.Array.Empty<(string, int, int, string)>();
+        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
+        Status = "Loading workspace (first use may take a while)...";
+        await EnsureWorkspaceReadyAsync();
+        Status = "Resolving...";
+        var definition = await Workspace.GoToDefinitionAsync(file, caretOffset);
+        if (definition is null) { Status = "No definition found"; return; }
+        Status = "Done";
+        await OpenAsync(definition);
+    }
+
+    /// <summary>Fills the Find panel with references to the symbol at <paramref name="caretOffset"/>. The panel
+    /// owns its own results and status; this just decides what to hand it.</summary>
+    public async Task FindReferencesAsync(string file, int caretOffset)
+    {
+        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
         Status = "Loading workspace...";
-        await Workspace.EnsureLoadedAsync(Solution.SolutionPath);
+        await EnsureWorkspaceReadyAsync();
         Status = "Finding references...";
-        var refs = await Workspace.FindReferencesAsync(file, position);
-        if (refs is null) { Status = "No symbol found"; return null; }
-        Status = $"{refs.Count} reference(s)";
-        return refs;
+        var references = await Workspace.FindReferencesAsync(file, caretOffset);
+        if (references is null) { Find.ShowNoResults("No symbol found"); Status = "No symbol found"; return; }
+        Find.ShowReferences(references);
+        Status = Find.Status;
     }
 }

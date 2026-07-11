@@ -20,7 +20,6 @@ public partial class MainWindowViewModel : ViewModelBase
     public RunService Run { get; }
     public SyntaxHighlightService Highlight { get; }
 
-    public OutputViewModel Output { get; } = new();
     public FindResultsViewModel Find { get; }
     public ProblemsViewModel Problems { get; }
     public NuGetViewModel NuGetVm { get; }
@@ -55,7 +54,17 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             if (RequestOpen is not null) await RequestOpen(f, l, c);
         });
-        NuGetVm = new NuGetViewModel(NuGet, Output);
+        NuGetVm = new NuGetViewModel(NuGet, ResolveNuGetOutput);
+    }
+
+    /// <summary>Gets-or-creates the shared <c>NuGet - Output</c> tab, activates it, and hands back its buffer.
+    /// Keeps <see cref="NuGetViewModel"/> ignorant of tab mechanics (Open Decision #3). The fixed <c>nuget:</c>
+    /// identity means a package restore never collides with a project literally named "NuGet".</summary>
+    private OutputViewModel ResolveNuGetOutput()
+    {
+        var tab = GetOrCreateOutputTab("nuget:", "NuGet - Output");
+        ActiveTab = tab;
+        return tab.Output;
     }
 
     [RelayCommand]
@@ -86,8 +95,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public async Task OpenFileAsync(string path, int line = 1, int col = 1)
     {
+        var id = TabViewModelBase.FileId(path);
         TabViewModelBase? tab = null;
-        foreach (var t in Tabs) if (t.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase)) { tab = t; break; }
+        foreach (var t in Tabs) if (t.TabId == id) { tab = t; break; }
         if (tab is null)
         {
             tab = TabViewModelBase.CreateForFile(path);
@@ -98,12 +108,31 @@ public partial class MainWindowViewModel : ViewModelBase
         await Task.CompletedTask;
     }
 
+    /// <summary>Reuses the existing output tab with this identity, or creates one (appended at the end,
+    /// mirroring <see cref="OpenFileAsync"/> — Open Decision #4). Dedup keys on <see cref="TabViewModelBase.TabId"/>,
+    /// never the header, so two output tabs can share a title while staying distinct.</summary>
+    private OutputTabViewModel GetOrCreateOutputTab(string tabId, string header)
+    {
+        foreach (var t in Tabs) if (t is OutputTabViewModel o && o.TabId == tabId) return o;
+        var tab = new OutputTabViewModel(tabId, header);
+        tab.RequestClose += CloseTabAsync;
+        Tabs.Add(tab);
+        return tab;
+    }
+
     private async Task CloseTabAsync(TabViewModelBase tab)
     {
+        // Closing the tab that owns the live run silently stops its process (no confirmation dialog yet).
+        if (ReferenceEquals(_liveRunTab, tab) && Run.IsRunning) { Run.Stop(); _liveRunTab = null; }
         if (tab.IsDirty) await tab.SaveAsync();
         Tabs.Remove(tab);
         if (ActiveTab == tab) ActiveTab = Tabs.Count > 0 ? Tabs[0] : null;
     }
+
+    /// <summary>The output tab that owns the currently-live <see cref="RunService"/> process. Cleared only when
+    /// the finalizing run still owns it — under single-run, starting run B kills run A, so A's continuation runs
+    /// after B has become the live tab; A must not clear B's tracking (see the ticket's kill-race gotcha).</summary>
+    private OutputTabViewModel? _liveRunTab;
 
     private bool CanPlay() => StartupProject?.IsRunnable == true;
 
@@ -111,11 +140,15 @@ public partial class MainWindowViewModel : ViewModelBase
     public async Task PlayAsync()
     {
         if (StartupProject is null) { Status = "No startup project"; return; }
-        Output.Clear();
         var name = Path.GetFileNameWithoutExtension(StartupProject.Path);
+        var tab = GetOrCreateOutputTab("run:" + Path.GetFullPath(StartupProject.Path).ToLowerInvariant(), $"{name} - Output");
+        tab.Clear();
+        ActiveTab = tab;
+        _liveRunTab = tab;
         Status = StartupProject.Kind == ProjectKind.Tst ? $"Testing {name}..." : $"Running {name}...";
-        try { await Run.RunAsync(StartupProject, Output.Append); Status = "Run finished"; }
+        try { await Run.RunAsync(StartupProject, tab.Append); Status = "Run finished"; }
         catch (Exception ex) { Status = ex.Message; }
+        finally { if (ReferenceEquals(_liveRunTab, tab)) _liveRunTab = null; }
     }
 
     [RelayCommand(CanExecute = nameof(CanPlay))]

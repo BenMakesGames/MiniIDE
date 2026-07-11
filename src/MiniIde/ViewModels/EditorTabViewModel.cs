@@ -13,7 +13,7 @@ public partial class EditorTabViewModel : TabViewModelBase
 
     [ObservableProperty] private int _caretOffset;
 
-    public EditorTabViewModel(string filePath) : base(filePath)
+    public EditorTabViewModel(string filePath) : base(FileId(filePath), filePath)
     {
         Mode = Path.GetExtension(filePath).ToFileKind().GetInfo().Highlight;
         Document = new TextDocument(File.ReadAllText(filePath));
@@ -22,7 +22,7 @@ public partial class EditorTabViewModel : TabViewModelBase
 
     public override async Task SaveAsync()
     {
-        await File.WriteAllTextAsync(FilePath, Document.Text);
+        await File.WriteAllTextAsync(FilePath!, Document.Text);
         IsDirty = false;
     }
 }

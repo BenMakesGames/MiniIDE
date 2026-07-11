@@ -75,7 +75,7 @@
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <Button Content="▶ Run" Margin="8,0,0,0" Command="{Binding PlayCommand}" Click="OnRunClick"/>
+                    <Button Content="▶ Run" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
                     <Button Content="■ Stop" Margin="4,0,0,0" Command="{Binding StopCommand}"/>
                 </StackPanel>
             </Grid>
@@ -127,7 +127,14 @@
                         <DataTemplate DataType="vm:TabViewModelBase">
                             <StackPanel Orientation="Horizontal">
                                 <StackPanel.ContextMenu>
-                                    <ContextMenu>
+                                    <!-- Path actions are inert on output tabs (no backing file); OnTabHeaderCtxOpening
+                                         disables every item when the tab has no FilePath. -->
+                                    <ContextMenu Opening="OnTabHeaderCtxOpening">
+                                        <ContextMenu.Styles>
+                                            <Style Selector="MenuItem:disabled">
+                                                <Setter Property="Opacity" Value="0.4"/>
+                                            </Style>
+                                        </ContextMenu.Styles>
                                         <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
                                             <MenuItem.Icon>
                                                 <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
@@ -160,6 +167,17 @@
                                     </ContextMenu>
                                 </ae:TextEditor.ContextMenu>
                             </ae:TextEditor>
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:OutputTabViewModel">
+                            <ae:TextEditor IsReadOnly="True"
+                                           ShowLineNumbers="False"
+                                           WordWrap="False"
+                                           FontFamily="Consolas,monospace"
+                                           FontSize="13"
+                                           Background="#000000"
+                                           Foreground="#DCDCDC"
+                                           AttachedToVisualTree="OnOutputEditorAttached"
+                                           DataContextChanged="OnOutputEditorDataContextChanged"/>
                         </DataTemplate>
                         <DataTemplate DataType="vm:ImageTabViewModel">
                             <Grid Background="#1E1E22">
@@ -203,19 +221,6 @@
                             </ListBox>
                             <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4"/>
                         </Grid>
-                    </TabItem>
-
-                    <TabItem Header="Output" x:Name="OutputTab">
-                        <ae:TextEditor Name="OutputEditor"
-                                       IsReadOnly="True"
-                                       ShowLineNumbers="False"
-                                       WordWrap="False"
-                                       FontFamily="Consolas,monospace"
-                                       FontSize="13"
-                                       Background="#000000"
-                                       Foreground="#DCDCDC"
-                                       AttachedToVisualTree="OnOutputEditorAttached"
-                                       DataContextChanged="OnOutputEditorDataContextChanged"/>
                     </TabItem>
 
                     <TabItem Header="NuGet">

@@ -114,3 +114,29 @@ The shared tab-header `ItemTemplate` context menu (Open in Explorer / Copy absol
 - [ ] Right-click an output tab's header — the Open in Explorer / Copy path items are disabled.
 - [ ] Trigger verbose output, scroll up mid-stream — appends do not yank the view to the bottom; scroll back to the bottom — appends re-pin to the bottom. Force >5000 lines — the top lines drop and the total holds at the cap.
 - [ ] Regression: open a `.cs` / `.xml` / `.json` file — colorization, editing, and save behave as before; opening a Find result still navigates correctly; the Find and NuGet bottom tabs work.
+
+## Learnings
+
+### Architectural decisions
+- **Identity key (`TabId`) as the single dedup axis.** Added a namespaced `TabId` on `TabViewModelBase` and made `FilePath` nullable. File tabs derive `TabId` from `TabViewModelBase.FileId(path)` = `"file:" + Path.GetFullPath(path).ToLowerInvariant()`; run tabs use `"run:" + <full lowercased project path>`; the NuGet tab uses the constant `"nuget:"`. Every reuse scan (`OpenFileAsync`, `GetOrCreateOutputTab`) compares `TabId`, never `Header`/`FilePath`. This is what lets a `.csproj` editor tab and that project's run-output tab coexist (different prefixes over the same path), and a project literally named "NuGet" stay distinct from the restore tab.
+- **Open Decisions resolved to their defaults, all confirmed sound after reading the code:**
+  - #1 compose `OutputViewModel` inside `OutputTabViewModel` (not absorb) — the buffer semantics (Dispatcher marshalling, 5000-line cap) were already encapsulated; no reason to duplicate.
+  - #2 VM-side `_liveRunTab` field checked in `CloseTabAsync` — keeps `RunService` coupling inside `MainWindowViewModel`.
+  - #3 inject `Func<OutputViewModel>` into `NuGetViewModel` — the delegate (`MainWindowViewModel.ResolveNuGetOutput`) gets-or-creates + activates the tab and returns its buffer, so `NuGetViewModel` stays ignorant of tab mechanics.
+  - #4 append new output tabs at the end of `Tabs` (mirrors `OpenFileAsync`).
+
+### Problems encountered
+- **Output tabs realize `TextEditor`s in the main tab area, which broke `FindActiveEditor`.** Before this ticket, the only `TextEditor`s whose `DataContext` could equal `ActiveTab` were editor tabs (image tabs use an `Image`; the old bottom Output editor's `DataContext` was the root VM, never a tab). Now an active output tab's editor matches `e.DataContext == Vm.ActiveTab`, so `FindActiveEditor()` would return it and F12/Shift+F12 would resolve go-to-definition against a fileless tab. The ticket's gotcha *assumed* `FindActiveEditor` returns null for non-editor tabs — that invariant no longer holds for free. Fix: constrain the predicate to `e.DataContext is EditorTabViewModel && e.DataContext == Vm.ActiveTab`. This also restored the compiler's ability to treat `ActiveTab.FilePath` as effectively-non-null at the two call sites (still needs `!` since the static type is `string?`).
+- **Making `FilePath` nullable surfaced three latent `CS8604` warnings** (`EditorTabViewModel.SaveAsync`, and the two `GoToDefinitionAsync`/`FindReferencesAsync` call sites). All three paths only ever run for editor tabs, so resolved with `FilePath!` + a comment rather than restructuring. Kept the "no new warnings" bar green.
+
+### Interesting tidbits
+- The per-instance output binding is a near-verbatim mirror of `BindEditor`: a `Dictionary<TextEditor, OutputBinding>` holding `CurrentTab`/`CurrentDoc` + the `Changing`/`Changed` handlers, guarded by `ReferenceEquals(b.CurrentTab, tab)` and detaching the previous document's handlers on every rebind. `TextDocument.Changing`/`Changed` are `EventHandler<DocumentChangeEventArgs>` (not the plain `EventHandler` of `TextChanged`).
+- The single-run kill race is handled purely by `ReferenceEquals(_liveRunTab, tab)` in both `PlayAsync`'s `finally` and `CloseTabAsync`: run A's continuation (which fires *after* run B has already claimed `_liveRunTab`) sees a mismatch and no-ops, so it never clears B's tracking.
+- The NuGet restore tab needs no stop-on-close logic for free: `_liveRunTab` is only ever a `run:` tab, so `ReferenceEquals(_liveRunTab, nugetTab)` is always false — closing it mid-restore just removes the tab and the in-flight `RestoreAsync` harmlessly finishes appending to an unshown buffer.
+
+### Related areas affected
+- `GetTargetPath` already returned `tab.FilePath` (now null for output tabs) → the header context-menu handlers (`OnCtx*Click`) already no-op on null. Added `OnTabHeaderCtxOpening` to also *disable* the items (greyed via a `MenuItem:disabled` opacity style) so the affordance reads as unavailable, mirroring `OnSolutionCtxOpening`.
+
+### Rejected alternatives
+- **Absorbing `OutputViewModel` into `OutputTabViewModel`** (Open Decision #1) — rejected; composition reuses the exact buffer/cap/threading semantics with zero duplication.
+- **A stop callback carried on the run tab** (Open Decision #2) — rejected in favour of the VM-side field; putting a `RunService` reference on the tab VM would leak process-engine coupling into a view-model that otherwise just holds a buffer.

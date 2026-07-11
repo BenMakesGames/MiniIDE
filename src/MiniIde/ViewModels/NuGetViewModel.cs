@@ -12,7 +12,7 @@ namespace MiniIde.ViewModels;
 public partial class NuGetViewModel : ViewModelBase
 {
     private readonly NuGetService _svc;
-    private readonly OutputViewModel _output;
+    private readonly Func<OutputViewModel> _resolveOutput;
 
     public ObservableCollection<ProjectEntry> Projects { get; } = new();
     public ObservableCollection<PackageEntry> Packages { get; } = new();
@@ -25,7 +25,9 @@ public partial class NuGetViewModel : ViewModelBase
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string _status = "";
 
-    public NuGetViewModel(NuGetService svc, OutputViewModel output) { _svc = svc; _output = output; }
+    // The delegate gets-or-creates + activates the "NuGet - Output" tab and returns its buffer, keeping this
+    // VM ignorant of tab mechanics. Resolved lazily per Apply so the tab appears only when a restore runs.
+    public NuGetViewModel(NuGetService svc, Func<OutputViewModel> resolveOutput) { _svc = svc; _resolveOutput = resolveOutput; }
 
     public void SetProjects(System.Collections.Generic.IEnumerable<ProjectEntry> entries)
     {
@@ -70,9 +72,10 @@ public partial class NuGetViewModel : ViewModelBase
         try
         {
             NuGetService.SetVersion(SelectedPackage.ProjectPath, SelectedPackage.Id, SelectedVersion);
-            _output.Clear();
-            _output.Append($"[nuget] {SelectedPackage.Id} -> {SelectedVersion}");
-            var code = await NuGetService.RestoreAsync(SelectedPackage.ProjectPath, _output.Append, CancellationToken.None);
+            var output = _resolveOutput();
+            output.Clear();
+            output.Append($"[nuget] {SelectedPackage.Id} -> {SelectedVersion}");
+            var code = await NuGetService.RestoreAsync(SelectedPackage.ProjectPath, output.Append, CancellationToken.None);
             Status = code == 0 ? "Restored" : $"Restore failed ({code})";
             var proj = SelectedProject;
             OnSelectedProjectChanged(proj);

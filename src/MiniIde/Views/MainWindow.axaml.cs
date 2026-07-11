@@ -54,7 +54,7 @@ public partial class MainWindow : Window
         if (ctrl && e.Key == Key.O) { e.Handled = true; await OpenSolutionDialogAsync(); }
         else if (ctrl && e.Key == Key.S) { e.Handled = true; await SaveActiveAsync(); }
         else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; if (!TrySearchTermInEditor()) FocusFind(); }
-        else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) { ShowOutput(); await Vm.PlayCommand.ExecuteAsync(null); } }
+        else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) await Vm.PlayCommand.ExecuteAsync(null); }
         else if (e.Key == Key.F12 && !shift) { e.Handled = true; await GoToDefinitionAsync(); }
         else if (e.Key == Key.F12 && shift) { e.Handled = true; await FindRefsAsync(); }
     }
@@ -70,10 +70,13 @@ public partial class MainWindow : Window
         editor.Focus();
     }
 
+    // Output tabs now realize a TextEditor too, so match only editor tabs — otherwise F12/Shift+F12 on an
+    // active output tab would resolve against a fileless tab. This keeps the invariant that a non-null result
+    // implies ActiveTab is an EditorTabViewModel (so its FilePath is non-null).
     private TextEditor? FindActiveEditor()
     {
         var host = this.GetVisualDescendants().OfType<TextEditor>()
-            .FirstOrDefault(e => e.DataContext == Vm.ActiveTab);
+            .FirstOrDefault(e => e.DataContext is EditorTabViewModel && e.DataContext == Vm.ActiveTab);
         return host;
     }
 
@@ -269,28 +272,56 @@ public partial class MainWindow : Window
         if (sender is TextEditor editor) BindOutputEditor(editor);
     }
 
-    private readonly HashSet<TextEditor> _outputBound = new();
+    private readonly Dictionary<TextEditor, OutputBinding> _outputBindings = new();
 
+    // Avalonia's TabControl swaps the content presenter's DataContext between two OutputTabViewModel tabs
+    // rather than realizing a fresh TextEditor, so one editor is shared across all output tabs. Mirror
+    // BindEditor: on every attach/DataContextChanged, re-point Document at the active tab's buffer and
+    // re-wire tail-follow, detaching the previous document's handlers first.
     private void BindOutputEditor(TextEditor editor)
     {
-        if (DataContext is not MainWindowViewModel vm) return;
-        if (!_outputBound.Add(editor)) return;
+        if (editor.DataContext is not OutputTabViewModel tab) return;
 
-        var doc = vm.Output.Document;
+        if (!_outputBindings.TryGetValue(editor, out var b))
+        {
+            b = new OutputBinding();
+            _outputBindings[editor] = b;
+        }
+
+        if (ReferenceEquals(b.CurrentTab, tab)) return;
+
+        if (b.CurrentDoc is not null)
+        {
+            if (b.ChangingHandler is not null) b.CurrentDoc.Changing -= b.ChangingHandler;
+            if (b.ChangedHandler is not null) b.CurrentDoc.Changed -= b.ChangedHandler;
+        }
+
+        var doc = tab.Output.Document;
+        b.CurrentTab = tab;
+        b.CurrentDoc = doc;
         editor.Document = doc;
 
         const double epsilon = 1.0;
-        bool wasAtBottom = true;
-
-        doc.Changing += (_, _) =>
+        b.ChangingHandler = (_, _) =>
         {
             var scroll = (Avalonia.Controls.Primitives.ILogicalScrollable)editor.TextArea.TextView;
-            wasAtBottom = scroll.Offset.Y >= scroll.Extent.Height - scroll.Viewport.Height - epsilon;
+            b.WasAtBottom = scroll.Offset.Y >= scroll.Extent.Height - scroll.Viewport.Height - epsilon;
         };
-        doc.Changed += (_, _) =>
+        b.ChangedHandler = (_, _) =>
         {
-            if (wasAtBottom) editor.ScrollToLine(editor.Document.LineCount);
+            if (b.WasAtBottom) editor.ScrollToLine(editor.Document.LineCount);
         };
+        doc.Changing += b.ChangingHandler;
+        doc.Changed += b.ChangedHandler;
+    }
+
+    private class OutputBinding
+    {
+        public OutputTabViewModel? CurrentTab;
+        public TextDocument? CurrentDoc;
+        public EventHandler<DocumentChangeEventArgs>? ChangingHandler;
+        public EventHandler<DocumentChangeEventArgs>? ChangedHandler;
+        public bool WasAtBottom = true;
     }
 
     private readonly System.Collections.Generic.Dictionary<TextEditor, EditorBinding> _bindings = new();
@@ -401,19 +432,15 @@ public partial class MainWindow : Window
         }, DispatcherPriority.Background);
     }
 
-    // Brings the Output tab to the foreground so streamed build/run output is visible. Shared by the Run
-    // button click and the F5 shortcut. Mirrors FocusFind but simpler — Output has no input box to focus.
-    private void ShowOutput()
+    // Output tabs have no backing file, so the path actions (Open in Explorer / Copy path) are inert on them.
+    // Disable every item when the tab under the menu has no FilePath; GetTargetPath returns null in that case.
+    private void OnTabHeaderCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        var tabs = this.FindControl<TabControl>("BottomTabs");
-        var outputTab = this.FindControl<TabItem>("OutputTab");
-        if (tabs is not null && outputTab is not null)
-            tabs.SelectedItem = outputTab;
+        if (sender is not ContextMenu cm) return;
+        var hasPath = GetTargetPath(cm.DataContext) is not null;
+        foreach (var item in cm.Items)
+            if (item is MenuItem mi) mi.IsEnabled = hasPath;
     }
-
-    // Click fires alongside the PlayCommand binding but not while the button is disabled (CanPlay false),
-    // so the tab only switches when there's actually something to run.
-    private void OnRunClick(object? sender, RoutedEventArgs e) => ShowOutput();
 
     private async Task OpenSolutionDialogAsync()
     {
@@ -458,7 +485,8 @@ public partial class MainWindow : Window
     {
         var editor = FindActiveEditor();
         if (editor is null || Vm.ActiveTab is null) return;
-        var result = await Vm.GoToDefinitionAsync(Vm.ActiveTab.FilePath, editor.CaretOffset);
+        // FindActiveEditor matched an editor tab, so FilePath is non-null.
+        var result = await Vm.GoToDefinitionAsync(Vm.ActiveTab.FilePath!, editor.CaretOffset);
         if (result is null) return;
         await OpenHit(result.Value.Item1, result.Value.Item2, result.Value.Item3);
     }
@@ -467,7 +495,8 @@ public partial class MainWindow : Window
     {
         var editor = FindActiveEditor();
         if (editor is null || Vm.ActiveTab is null) return;
-        var refs = await Vm.FindReferencesAsync(Vm.ActiveTab.FilePath, editor.CaretOffset);
+        // FindActiveEditor matched an editor tab, so FilePath is non-null.
+        var refs = await Vm.FindReferencesAsync(Vm.ActiveTab.FilePath!, editor.CaretOffset);
         if (refs is null) { Vm.Find.Results.Clear(); Vm.Find.Status = "No symbol found"; return; }
         PopulateRefs(refs);
     }

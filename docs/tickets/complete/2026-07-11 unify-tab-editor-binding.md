@@ -119,3 +119,36 @@ Two bullets are now wrong:
 - [ ] Right-click a token in a `.cs` file → the caret moves to it; **Search solution** shows the token in its header, **Find usages** / **Go to definition** are enabled. Right-click inside a keyword/string/comment → the symbol items are disabled. Right-click with a selection → the selection is preserved and used as the search term.
 - [ ] Close an output tab whose run is still live → the process stops (unchanged behavior).
 - [ ] No exceptions surfaced in the status bar or the debug output throughout.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decision 1 — shared contract: abstract `DocumentTabViewModel : TabViewModelBase`** (the default). It takes the `TextDocument` as a **constructor parameter** rather than exposing a settable/`init` property. That keeps `Document` non-null by construction for both derivations (`EditorTabViewModel` passes `new TextDocument(File.ReadAllText(path))`, `OutputTabViewModel` passes `new TextDocument()`), so the binder never has to null-check it. `ImageTabViewModel` stays on `TabViewModelBase`.
+- **Open Decision 2 — binder shape: the delegate form** (the default), but with **two** delegates rather than one, because bind has two distinct lifetimes:
+  - `Func<TextEditor, (TState, Action)> setUpControl` — one-time per realized control; returns the per-control state **and** its teardown.
+  - `Func<TextEditor, TState, TTab, Action> attachTab` — per tab; returns its detach.
+  Each returns its own undo, so setup/teardown sit adjacently and cannot drift. `Unbind` is then mechanically the inverse: invoke the tab detach, invoke the control teardown, drop the entry.
+- **The binder is generic over the per-control state (`TabEditorBinder<TTab, TState>`), not just the tab type.** This is what keeps `ColorizerFor` type-safe: `CodeEditorState` holds a **non-null** `RoslynColorizer`, so `_codeEditors.StateFor(editor)?.Colorizer` needs no cast and no `null!`. A single-type-param binder would have forced either an `object?` tag (unsafe cast at the call site) or a second registry in the window. `OutputEditorState` carries the `WasAtBottom` flag, so the second type param earns its keep on both sides.
+- **The per-kind wirings moved into `Views/TabEditorBinder.cs` with the binder**, and `DebouncedRefreshAsync` / `RefreshAndRedraw` / `OnEditorPointerPressed` went with them — they are the code-tab wiring, not window concerns, and the ticket's scope called for the new file to carry "the two per-kind attach/detach wirings". `MainWindow.axaml.cs` shrank by ~230 lines and now holds only forwarders plus the symbol-text helpers (which stay, per Out of scope).
+- **Open Decisions 3 & 4** took their defaults: `Views/TabEditorBinder.cs`; unbind does **not** null `editor.Document`.
+
+### Problems encountered
+- **`VisualTreeAttachmentEventArgs` lives in the root `Avalonia` namespace**, not `Avalonia.VisualTree`. Deleting `using Avalonia.VisualTree;` (now dead — the visual-tree scan is gone) is correct, but dropping `using Avalonia;` alongside it breaks all six attach/detach handler signatures. Five `CS0246`s, nothing subtler.
+- The tab-switch path previously called `DebounceCts.Cancel()` **without** `Dispose()` (the ticket flagged this). The new detach closure does both, and nulls the field.
+
+### Interesting tidbits
+- **The caret `PositionChanged` subscription had to stop being an anonymous lambda.** It was the one subscription in the old `BindEditor` that was structurally unremovable — which is a decent tell that the old code never intended to unbind. `Caret.PositionChanged` is a plain `EventHandler`, so an `EventHandler` local stored and used for both `+=` and `-=` is all it needs.
+- **`OutputEditorState.WasAtBottom`'s initial value is unobservable in practice**: `Changed` only ever fires after `Changing`, which recomputes the flag. Keeping it as per-control state (defaulting true) matches the old behavior exactly; a per-attach captured local would have been equivalent.
+- **A double-added `RoslynColorizer` would not be visible** — two instances write the same brushes, so the rendered text looks identical. The detach/re-attach test therefore proves absence of *exceptions* and *lost* highlighting, not absence of duplicates; the duplicate is ruled out structurally by `Unbind` removing the transformer it added.
+
+### Verification notes
+Exercised in the running app (not just by build/test): fresh `.cs` tab highlights immediately; F5 opens an output tab that streams and tail-follows (which detaches the code editor); switching back re-attaches and re-highlights correctly; `.csproj` renders xshd XML and flipping back to the `.cs` tab shows no color bleed in either direction; right-click places the caret and enables **Find usages** / **Go to definition** (proving `ColorizerFor` re-sources from the binder's state and `FindActiveEditor` resolves from the registry); **Go to definition on a symbol in a not-yet-open file opened the new tab with the caret on the definition line** — the brand-new-tab timing check the Constraints flagged. Parity holds because the registry is updated by the same synchronous `AttachedToVisualTree` / `DataContextChanged` pass that used to set the `DataContext` the visual-tree scan matched on.
+
+### Related areas affected / follow-ups
+- **No view-layer test project exists** (Out of scope, deliberately), so all of the above was verified by driving the real window with ad-hoc Win32 `SendInput`/screenshot scripting. That is not repeatable. A follow-up ticket for an **`Avalonia.Headless`** test project would make this class of view-layer regression (bind/unbind symmetry, tail-follow, mode switching) testable in-process.
+- The rest of the `MainWindow.axaml.cs` decomposition (symbol-text helpers) and the three imperative `ContextMenu.Opening` enablement handlers remain parked for their own tickets, untouched here.
+
+### Rejected alternatives
+- **Sourcing `ColorizerFor` from `editor.TextArea.TextView.LineTransformers.OfType<RoslynColorizer>()`** instead of from binder state. It works and needs no `TState`, but it re-introduces "search the world for the thing you already own" — the exact instinct this ticket exists to remove.
+- **An abstract binder base with `OnBind`/`OnUnbind` hooks and two subclasses.** More types, and it separates each variant's setup from its teardown — the drift the delegate form is designed to prevent.
+- **One merged registry across both editor kinds.** Explicitly ruled out by the Constraints: it would resurrect the `DataContext is EditorTabViewModel` ambiguity that the per-kind split eliminates structurally.

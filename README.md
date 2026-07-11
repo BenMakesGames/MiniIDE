@@ -8,7 +8,7 @@ I love Rider - it's been my favorite C# IDE for years - but like all IDEs, it's 
 
 but of all the features Rider offers, I've only used very few; with agentic AIs, I use fewer still.
 
-(I've tried vscode various times over the years: its UI/UX is simply not to my liking, and their C# support has always been lacking (they only _recently_ got solution support?? 'the heck?!?), _and_ it's an electron app?! that's extra weight++!)
+(I've tried vscode various times over the years: its UI/UX is simply not to my liking, and their C# support has always lagged, _and_ it's an electron app?! that's extra weight++!)
 
 so, like any ridiculous dev, I've decided to "just" make my own...
 
@@ -25,7 +25,7 @@ ultimately: to reach a point where I'm comfortable uninstalling Rider.
 | jump to declaration                    | ✔ - could use a UI pass |
 | find usages                            | ✔ - could use a UI pass |
 | global search, w/ regex if you want it | ✔ - could use a UI pass |
-| show all warnings & errors             | ❌                       |
+| solution-wide warnings & errors view   | ✅                       |
 | NuGet package management               | ✔ - could use a UI pass |
 | a decent-ish & modern-ish look & feel  | ✅                       |
 
@@ -33,7 +33,7 @@ ultimately: to reach a point where I'm comfortable uninstalling Rider.
 
 | feature                                                | status |
 | ------------------------------------------------------ | ------ |
-| git integration?                                       | ❌      |
+| _any_ git integration?                                 | ❌      |
 | navigate interface implementations & inheritance trees | ❌      |
 | nice test result UI (not just console output)          | ❌      |
 

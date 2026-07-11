@@ -2,5 +2,6 @@
   <Folder Name="/src/">
     <Project Path="src/BenMakesGames.FileGrepper/BenMakesGames.FileGrepper.csproj" />
     <Project Path="src/MiniIde/MiniIde.csproj" />
+    <Project Path="src/MiniIde.Tests/MiniIde.Tests.csproj" />
   </Folder>
 </Solution>

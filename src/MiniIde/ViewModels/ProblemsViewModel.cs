@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -115,7 +114,7 @@ public partial class ProblemsViewModel : ViewModelBase
             .GroupBy(p => p.File)
             .Select(g =>
             {
-                var name = g.Key is null ? "(No file)" : Rel(g.Key);
+                var name = g.Key is null ? "(No file)" : _sln.ToRelativePath(g.Key);
                 var items = g.OrderBy(p => p.Line).ThenBy(p => p.Column).ToList();
                 var leaves = items.Select(p => new ProblemLeaf(p, ByFileDisplay(p))).ToList();
                 var hasError = items.Any(p => p.Severity == ProblemSeverity.Error);
@@ -147,14 +146,8 @@ public partial class ProblemsViewModel : ViewModelBase
 
     // By-code leaf: parent shows the code, so lead with the file:line where it occurred.
     private string ByCodeDisplay(ProblemItem p) =>
-        p.HasLocation ? $"{Rel(p.File!)}({p.Line},{p.Column}): {p.Message}" : $"(no file): {p.Message}";
+        p.HasLocation ? $"{_sln.ToRelativePath(p.File!)}({p.Line},{p.Column}): {p.Message}" : $"(no file): {p.Message}";
 
     // "1 error", "0 errors", "3 warnings" — no parenthetical "(s)".
     private static string Count(int n, string noun) => $"{n} {noun}{(n == 1 ? "" : "s")}";
-
-    private string Rel(string file)
-    {
-        var dir = _sln.SolutionPath is null ? null : Path.GetDirectoryName(_sln.SolutionPath);
-        return dir is null ? file : Path.GetRelativePath(dir, file);
-    }
 }

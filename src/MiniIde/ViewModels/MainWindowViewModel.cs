@@ -59,14 +59,14 @@ public partial class MainWindowViewModel : ViewModelBase
         NuGetVm = new NuGetViewModel(NuGet, ResolveNuGetOutput);
     }
 
-    /// <summary>Gets-or-creates the shared <c>NuGet - Output</c> tab, activates it, and hands back its buffer.
-    /// Keeps <see cref="NuGetViewModel"/> ignorant of tab mechanics (Open Decision #3). The fixed <c>nuget:</c>
+    /// <summary>Gets-or-creates the shared <c>NuGet - Output</c> tab and activates it. Keeps
+    /// <see cref="NuGetViewModel"/> ignorant of tab mechanics (Open Decision #3). The fixed <c>nuget:</c>
     /// identity means a package restore never collides with a project literally named "NuGet".</summary>
-    private OutputViewModel ResolveNuGetOutput()
+    private OutputTabViewModel ResolveNuGetOutput()
     {
         var tab = GetOrCreateOutputTab("nuget:", "NuGet - Output");
         ActiveTab = tab;
-        return tab.Output;
+        return tab;
     }
 
     [RelayCommand]

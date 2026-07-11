@@ -101,7 +101,9 @@ public class WorkspaceService : IDisposable
     {
         if (_solution is null) return System.Array.Empty<ProblemItem>();
         var results = new List<ProblemItem>();
-        var seen = new HashSet<string>();
+        // ProblemItem is a record: structural equality already defines "the same diagnostic", so the
+        // set does the de-duplication with no hand-rolled key to keep in sync with the record's fields.
+        var seen = new HashSet<ProblemItem>();
         foreach (var project in _solution.Projects)
         {
             ct.ThrowIfCancellationRequested();
@@ -123,9 +125,8 @@ public class WorkspaceService : IDisposable
                     line = span.StartLinePosition.Line + 1;
                     column = span.StartLinePosition.Character + 1;
                 }
-                var message = diag.GetMessage();
-                if (!seen.Add($"{diag.Id}|{file}|{line}|{column}|{message}")) continue;
-                results.Add(new ProblemItem(diag.Id, severity, message, file, line, column));
+                var item = new ProblemItem(diag.Id, severity, diag.GetMessage(), file, line, column);
+                if (seen.Add(item)) results.Add(item);
             }
         }
         return results;

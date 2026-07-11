@@ -260,7 +260,7 @@ public partial class MainWindow : Window
             if (b.ChangedHandler is not null) b.CurrentDoc.Changed -= b.ChangedHandler;
         }
 
-        var doc = tab.Output.Document;
+        var doc = tab.Document;
         b.CurrentTab = tab;
         b.CurrentDoc = doc;
         editor.Document = doc;

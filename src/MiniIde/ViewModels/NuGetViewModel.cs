@@ -12,7 +12,7 @@ namespace MiniIde.ViewModels;
 public partial class NuGetViewModel : ViewModelBase
 {
     private readonly NuGetService _svc;
-    private readonly Func<OutputViewModel> _resolveOutput;
+    private readonly Func<OutputTabViewModel> _resolveOutput;
 
     public ObservableCollection<ProjectEntry> Projects { get; } = new();
     public ObservableCollection<PackageEntry> Packages { get; } = new();
@@ -25,9 +25,9 @@ public partial class NuGetViewModel : ViewModelBase
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string _status = "";
 
-    // The delegate gets-or-creates + activates the "NuGet - Output" tab and returns its buffer, keeping this
-    // VM ignorant of tab mechanics. Resolved lazily per Apply so the tab appears only when a restore runs.
-    public NuGetViewModel(NuGetService svc, Func<OutputViewModel> resolveOutput) { _svc = svc; _resolveOutput = resolveOutput; }
+    // The delegate gets-or-creates + activates the "NuGet - Output" tab, keeping this VM ignorant of tab
+    // mechanics. Resolved lazily per Apply so the tab appears only when a restore runs.
+    public NuGetViewModel(NuGetService svc, Func<OutputTabViewModel> resolveOutput) { _svc = svc; _resolveOutput = resolveOutput; }
 
     public void SetProjects(System.Collections.Generic.IEnumerable<ProjectEntry> entries)
     {

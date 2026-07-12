@@ -96,3 +96,27 @@ No new using directives beyond what `MainWindow.axaml.cs` already imports (`Aval
 - [ ] Horizontal scroll offset does not budge on any PageUp / PageDown / Home / End press (regression check for `treeview-horizontal-scroll-jitter` fix).
 - [ ] Open a solution, immediately press End before clicking anything — no crash; last item selected.
 - [ ] Load an empty / not-yet-loaded tree state (no solution open); press each key — no crash, nothing selected.
+
+## Learnings
+
+### Open Decisions — resolved
+1. **Helper extraction**: `GetVisibleTreeItems` extracted as private static, shared by both page and jump helpers. `IndexOfSelected` also extracted since the same "match `DataContext` against `SelectedItem`" lookup is used by both. Reads cleaner than four inlined LINQ chains.
+2. **PageUp/Down when selection off-screen**: pages relative to current selection, not viewport contents. Matches arrow-key onboarding.
+
+### Ticket claim about usings was wrong
+Ticket said `Avalonia.VisualTree` was already imported by `MainWindow.axaml.cs` — it wasn't. `GetVisualDescendants` is an extension in that namespace, so the `using` had to be added. Trivial, but worth flagging for future ticket-quality: don't assume; grep.
+
+### Handled semantics: only mark handled when actually acting
+Empty tree, un-laid-out tree, and "already at the target end" cases all return without setting `e.Handled`. Rationale: the default `ScrollViewer` paging is welcome to fire in those cases — there's nowhere further to move the selection anyway, and swallowing the key with zero effect feels broken. Silent bail on missing `Viewport.Height` covers the pre-layout race where a user might spam PageDown before the tree is drawn.
+
+### `actualIndex` vs. `current` split matters for onboarding case
+`MovePageSelection` treats "nothing selected" as `current = 0` for the math (per Implementation section), but compares the final `newIndex` against the raw `actualIndex` (which is -1 when nothing is selected). Without the split, PageUp with no selection would compute `newIndex == current == 0` and bail without ever selecting anything — the "select first" onboarding behavior would silently fail.
+
+### `ReferenceEquals` for the selection lookup
+`tv.SelectedItem` is the `TreeNode` model instance, and every visible container's `DataContext` is set to the same node instance by the ItemsControl binding. Reference identity is the right (and cheapest) check — no need for an `Equals` override on `TreeNode`.
+
+### Focus and selection are separate on `TreeView` — must sync both
+Initial implementation set only `SelectedItem` and called `BringIntoView()`. Symptom: two visible cursors — blue selection on the new row, white keyboard-focus outline stuck on the previous row — and pressing an arrow key next resumed navigation from the *focused* container, not the newly-selected one. Fix: also call `.Focus(NavigationMethod.Directional)` on the target `TreeViewItem`. TreeView's built-in arrow-key handler navigates from the focused container; if focus doesn't move, selection changes don't "stick" for keyboard nav. Extracted `SelectAndFocus` so both `MovePageSelection` and `JumpTreeSelection` do the full three-step sync (select, focus, bring-into-view).
+
+### Horizontal scroll fix is load-bearing here too
+Every `BringIntoView()` added by this ticket funnels through the static-ctor class handler from `treeview-horizontal-scroll-jitter`. Delete that block and PageDown/End would suddenly start yanking the horizontal offset around on jump. Cross-referenced in a comment on the visible-items helper for future readers.

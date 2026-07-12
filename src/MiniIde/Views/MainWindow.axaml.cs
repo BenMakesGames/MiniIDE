@@ -11,6 +11,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AvaloniaEdit;
 using MiniIde.Models;
 using MiniIde.ViewModels;
@@ -228,13 +229,83 @@ public partial class MainWindow : Window
 
     private async void OnTreeKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter) return;
-        if (sender is not TreeView tv || tv.SelectedItem is not TreeNode node) return;
-        if (node.Kind == NodeKind.File && node.Path is not null)
+        if (sender is not TreeView tv) return;
+        switch (e.Key)
         {
-            e.Handled = true;
-            await Vm.OpenFileAsync(node.Path);
+            case Key.Enter:
+                if (tv.SelectedItem is TreeNode { Kind: NodeKind.File, Path: not null } node)
+                {
+                    e.Handled = true;
+                    await Vm.OpenFileAsync(node.Path);
+                }
+                break;
+            case Key.PageDown: MovePageSelection(tv, direction: +1, e); break;
+            case Key.PageUp:   MovePageSelection(tv, direction: -1, e); break;
+            case Key.Home:     JumpTreeSelection(tv, toFirst: true,  e); break;
+            case Key.End:      JumpTreeSelection(tv, toFirst: false, e); break;
         }
+    }
+
+    // TreeView is un-virtualized, so the realized TreeViewItem descendants — filtered to visible ones — are the
+    // full flat, in-order list of rendered rows honoring collapsed subtrees. If virtualization is ever turned
+    // on, off-screen items won't be here and these helpers need revisiting.
+    private static IReadOnlyList<TreeViewItem> GetVisibleTreeItems(TreeView tv) =>
+        tv.GetVisualDescendants().OfType<TreeViewItem>().Where(i => i.IsEffectivelyVisible).ToList();
+
+    private static int IndexOfSelected(IReadOnlyList<TreeViewItem> items, object? selected)
+    {
+        for (int i = 0; i < items.Count; i++)
+            if (ReferenceEquals(items[i].DataContext, selected)) return i;
+        return -1;
+    }
+
+    // Bails without setting Handled when there's nowhere to go — empty tree, tree not yet laid out, or already
+    // at the target end. The default ScrollViewer paging may still fire in that case, but the tree has no more
+    // rows to page through anyway.
+    private static void MovePageSelection(TreeView tv, int direction, KeyEventArgs e)
+    {
+        var items = GetVisibleTreeItems(tv);
+        if (items.Count == 0) return;
+
+        var viewport = tv.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault()?.Viewport.Height ?? 0;
+        if (viewport <= 0) return;
+
+        var actualIndex = IndexOfSelected(items, tv.SelectedItem);
+        // Nothing selected → treat as index 0. PageDown then advances by a page; PageUp clamps back to 0 and
+        // effectively selects the first row.
+        var current = Math.Max(0, actualIndex);
+        var itemHeight = items[current].Bounds.Height > 0 ? items[current].Bounds.Height : items[0].Bounds.Height;
+        if (itemHeight <= 0) return;
+
+        var page = Math.Max(1, (int)(viewport / itemHeight));
+        var newIndex = Math.Clamp(current + direction * page, 0, items.Count - 1);
+        if (newIndex == actualIndex) return;
+
+        SelectAndFocus(tv, items[newIndex]);
+        e.Handled = true;
+    }
+
+    private static void JumpTreeSelection(TreeView tv, bool toFirst, KeyEventArgs e)
+    {
+        var items = GetVisibleTreeItems(tv);
+        if (items.Count == 0) return;
+
+        var target = toFirst ? 0 : items.Count - 1;
+        if (IndexOfSelected(items, tv.SelectedItem) == target) return;
+
+        SelectAndFocus(tv, items[target]);
+        e.Handled = true;
+    }
+
+    // TreeView tracks keyboard focus separately from selection: the container carrying focus is where arrow-key
+    // navigation resumes, not the one carrying the blue selection highlight. Setting `SelectedItem` alone leaves
+    // the focus (white outline) on the previous container, so a subsequent arrow key jumps from *there*, not
+    // from where the user just paged to. Focusing the target container syncs both.
+    private static void SelectAndFocus(TreeView tv, TreeViewItem target)
+    {
+        tv.SelectedItem = target.DataContext;
+        target.Focus(NavigationMethod.Directional);
+        target.BringIntoView();
     }
 
     private void OnFindKeyDown(object? sender, KeyEventArgs e)

@@ -247,7 +247,10 @@
                                 <CheckBox Content="Prerelease" IsChecked="{Binding IncludePrerelease}" Margin="10,0,0,0"/>
                             </StackPanel>
 
-                            <ListBox Grid.Row="1" Grid.Column="0" Background="#000000" ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}">
+                            <ListBox Grid.Row="1" Grid.Column="0" Background="#000000"
+                                     x:Name="NuGetProjectsList"
+                                     AttachedToVisualTree="OnNuGetListsAttached"
+                                     ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="m:ProjectEntry">
                                         <StackPanel Orientation="Horizontal">
@@ -263,7 +266,9 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                             <GridSplitter Grid.Row="1" Grid.Column="1" Background="#2D2D30"/>
-                            <ListBox Grid.Row="1" Grid.Column="2" Background="#000000" ItemsSource="{Binding Packages}" SelectedItem="{Binding SelectedPackage}">
+                            <ListBox Grid.Row="1" Grid.Column="2" Background="#000000"
+                                     x:Name="NuGetPackagesList"
+                                     ItemsSource="{Binding Packages}" SelectedItem="{Binding SelectedPackage}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="m:PackageEntry">
                                         <Grid ColumnDefinitions="*,Auto">
@@ -274,7 +279,9 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                             <GridSplitter Grid.Row="1" Grid.Column="3" Background="#2D2D30"/>
-                            <ListBox Grid.Row="1" Grid.Column="4" Background="#000000" ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"/>
+                            <ListBox Grid.Row="1" Grid.Column="4" Background="#000000"
+                                     x:Name="NuGetVersionsList"
+                                     ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"/>
 
                             <DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5" Margin="4">
                                 <Button DockPanel.Dock="Right" Content="Apply + Restore" Command="{Binding ApplyCommand}"/>

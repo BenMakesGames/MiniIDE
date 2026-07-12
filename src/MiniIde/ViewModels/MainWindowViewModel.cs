@@ -55,7 +55,7 @@ public partial class MainWindowViewModel : ViewModelBase
         Workspace.Progress += m => Dispatcher.UIThread.Post(() => Status = m);
         Find = new FindResultsViewModel(Search, Solution, OpenAsync);
         Problems = new ProblemsViewModel(Workspace, Solution, EnsureWorkspaceReadyAsync, OpenAsync);
-        NuGetVm = new NuGetViewModel(NuGet, ResolveNuGetOutput);
+        NuGetVm = new NuGetViewModel(NuGet, ResolveNuGetOutput, ResolveNuGetMetadataTab);
     }
 
     private Task OpenAsync(SourceLocation location) => RequestOpen?.Invoke(location) ?? Task.CompletedTask;
@@ -66,6 +66,16 @@ public partial class MainWindowViewModel : ViewModelBase
     private OutputTabViewModel ResolveNuGetOutput()
     {
         var tab = GetOrCreateOutputTab("nuget:", "NuGet - Output");
+        ActiveTab = tab;
+        return tab;
+    }
+
+    /// <summary>Per-package metadata tab counterpart to <see cref="ResolveNuGetOutput"/>. Same "get-or-create +
+    /// activate" contract; the caller supplies its own <c>nuget-meta:{id-lower}</c>-shaped id and header so
+    /// each package gets a distinct tab that dedups on re-double-click.</summary>
+    private OutputTabViewModel ResolveNuGetMetadataTab(string tabId, string header)
+    {
+        var tab = GetOrCreateOutputTab(tabId, header);
         ActiveTab = tab;
         return tab;
     }

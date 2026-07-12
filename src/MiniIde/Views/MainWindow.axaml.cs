@@ -220,6 +220,42 @@ public partial class MainWindow : Window
             Vm.Problems.Activate(leaf);
     }
 
+    // Same rationale as OnProblemsTreeAttached: the NuGet TabItem is not realized at ctor time, so its three
+    // ListBoxes aren't in the visual tree yet. All three realize together when the tab first shows — one
+    // AttachedToVisualTree fire is enough to hook them as a set. Tunnel PointerPressed + ClickCount==2 (never
+    // DoubleTapped) so presses at row edges / right of text still register (see docs/avalonia.md).
+    private bool _nugetListsHooked;
+    private void OnNuGetListsAttached(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (_nugetListsHooked) return;
+        _nugetListsHooked = true;
+        NuGetProjectsList.AddHandler(PointerPressedEvent, OnNuGetProjectsPointerPressed, RoutingStrategies.Tunnel);
+        NuGetPackagesList.AddHandler(PointerPressedEvent, OnNuGetPackagesPointerPressed, RoutingStrategies.Tunnel);
+        NuGetVersionsList.AddHandler(PointerPressedEvent, OnNuGetVersionsPointerPressed, RoutingStrategies.Tunnel);
+    }
+
+    private async void OnNuGetProjectsPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        if (sender is ListBox lb && lb.SelectedItem is ProjectEntry entry)
+            await Vm.OpenFileAsync(entry.Path);
+    }
+
+    private async void OnNuGetPackagesPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        if (sender is ListBox lb && lb.SelectedItem is PackageEntry entry)
+            await Vm.NuGetVm.OpenMetadataAsync(entry);
+    }
+
+    // The first press already committed SelectedVersion via the two-way binding — do not re-assign here. ApplyAsync
+    // no-ops if SelectedPackage or SelectedVersion is null, so guarding those is not this handler's job.
+    private async void OnNuGetVersionsPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        await Vm.NuGetVm.ApplyCommand.ExecuteAsync(null);
+    }
+
     private async void OnSolutionNameDoubleTapped(object? sender, TappedEventArgs e)
     {
         var path = Vm.Solution.SolutionPath;

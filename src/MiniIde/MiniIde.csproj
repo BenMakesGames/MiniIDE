@@ -26,10 +26,33 @@
     <Delete Files="@(_PdbToDelete)" />
   </Target>
 
+  <!-- PublishSingleFile bundles the BuildHost DLL into MiniIde.exe, but Roslyn's MSBuildWorkspace spawns
+       BuildHost as a separate dotnet subprocess and looks for the DLL on disk next to the exe. Without this,
+       "Refresh" in the Problems panel throws "The build host could not be found at ...BuildHost-netcore\...".
+       Only netcore is copied — we don't target .NET Framework projects, so BuildHost-net472 stays out. -->
+  <Target Name="CopyBuildHostToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_BuildHostNetCore Include="$(OutDir)BuildHost-netcore\**\*.*" Exclude="$(OutDir)BuildHost-netcore\**\*.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BuildHostNetCore)"
+          DestinationFolder="$(PublishDir)BuildHost-netcore\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <Folder Include="Models\" />
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
+
+  <!-- Drop the .NET Framework BuildHost that Microsoft.CodeAnalysis.Workspaces.MSBuild ships in its
+       contentFiles. We only load modern .NET projects, so BuildHost-net472 is dead weight in both bin and
+       publish outputs. This runs before Build so items are stripped before copy. -->
+  <Target Name="RemoveBuildHostNet472Items" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <None Remove="@(None)" Condition="$([System.String]::Copy('%(Identity)').Contains('BuildHost-net472'))" />
+      <Content Remove="@(Content)" Condition="$([System.String]::Copy('%(Identity)').Contains('BuildHost-net472'))" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <ProjectReference Include="..\BenMakesGames.FileGrepper\BenMakesGames.FileGrepper.csproj" />

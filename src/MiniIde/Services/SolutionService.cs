@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.SolutionPersistence.Model;
@@ -31,7 +32,9 @@ public class SolutionService
 
         var entries = new List<ProjectEntry>();
         var projectNodes = new List<TreeNode>();
-        foreach (var p in model.SolutionProjects)
+        var ordered = model.SolutionProjects
+            .OrderBy(p => Path.GetFileNameWithoutExtension(p.FilePath), System.StringComparer.OrdinalIgnoreCase);
+        foreach (var p in ordered)
         {
             var abs = Path.GetFullPath(Path.Combine(dir, p.FilePath));
             var kind = ProjectClassifier.Classify(abs);

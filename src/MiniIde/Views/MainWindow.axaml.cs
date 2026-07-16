@@ -52,6 +52,9 @@ public partial class MainWindow : Window
             if (Vm is not null) Vm.RequestOpen += Reveal;
         };
         KeyDown += OnGlobalKeyDown;
+        // Reconcile against disk whenever the window regains focus: external tools (the agent, CLI git) own
+        // the writes under the read-only law, so re-entering MiniIde is exactly when the view might be stale.
+        Activated += OnWindowActivated;
         // The panel starts expanded, so the toggle's band starts at the full strip height (see TabStripHeight).
         BottomPanelToggleBand.Height = TabStripHeight;
         SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
@@ -59,12 +62,17 @@ public partial class MainWindow : Window
         BottomTabs.AddHandler(PointerPressedEvent, OnBottomTabsPointerPressed, RoutingStrategies.Tunnel);
     }
 
+    // Activated can fire before the DataContext is wired at startup; guard rather than assume Vm is set.
+    private async void OnWindowActivated(object? sender, EventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm) await vm.RefreshFromDiskAsync();
+    }
+
     private async void OnGlobalKeyDown(object? sender, KeyEventArgs e)
     {
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (ctrl && e.Key == Key.O) { e.Handled = true; await OpenSolutionDialogAsync(); }
-        else if (ctrl && e.Key == Key.S) { e.Handled = true; await SaveActiveAsync(); }
         else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; if (!TrySearchTermInEditor()) FocusFind(); }
         else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) await Vm.PlayCommand.ExecuteAsync(null); }
         else if (e.Key == Key.F12 && !shift) { e.Handled = true; await GoToDefinitionAsync(); }
@@ -113,7 +121,8 @@ public partial class MainWindow : Window
     {
         var path = Vm.Solution.SolutionPath;
         if (path is null) { Vm.Status = "No solution open"; return; }
-        await Vm.OpenSolutionCommand.ExecuteAsync(path);
+        await Vm.OpenSolutionCommand.ExecuteAsync(path); // refreshes the tree/project list...
+        await Vm.ReloadWorkspaceAsync();                 // ...and the semantic snapshot + open tabs
     }
 
     private async void OnCloseTabClick(object? sender, RoutedEventArgs e)
@@ -511,11 +520,6 @@ public partial class MainWindow : Window
             Process.Start(psi);
         }
         catch (Exception ex) { Vm.Status = $"Open new solution failed: {ex.Message}"; }
-    }
-
-    private async Task SaveActiveAsync()
-    {
-        if (Vm.ActiveTab is not null) await Vm.ActiveTab.SaveCommand.ExecuteAsync(null);
     }
 
     // ── Code-editor context menu (Search / Find usages / Go to definition) ──

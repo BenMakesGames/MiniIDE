@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MiniIde.Models;
 
@@ -17,27 +16,21 @@ public abstract partial class TabViewModelBase : ViewModelBase
     /// <summary>The backing file, or <c>null</c> for tabs with no file (e.g. output tabs).</summary>
     public string? FilePath { get; }
 
-    public virtual string Header => Path.GetFileName(FilePath) + (IsDirty ? " *" : "");
-
-    [ObservableProperty] private bool _isDirty;
+    // No dirty marker: the editor is a read-only window onto disk (see README's "no hand-typed edits"
+    // law), so a tab's header is exactly its file name and never carries a " *". The `?? ""` only guards the
+    // fileless base case — every fileless tab (output) overrides Header, so in practice FilePath is non-null.
+    public virtual string Header => Path.GetFileName(FilePath) ?? "";
 
     public event Func<TabViewModelBase, Task>? RequestClose;
-
-    public IAsyncRelayCommand SaveCommand { get; }
 
     protected TabViewModelBase(string tabId, string? filePath)
     {
         TabId = tabId;
         FilePath = filePath;
-        SaveCommand = new AsyncRelayCommand(SaveAsync);
     }
-
-    public abstract Task SaveAsync();
 
     [RelayCommand]
     public Task CloseAsync() => RequestClose?.Invoke(this) ?? Task.CompletedTask;
-
-    partial void OnIsDirtyChanged(bool value) => OnPropertyChanged(nameof(Header));
 
     /// <summary>The <c>file:</c>-namespaced identity for a path — normalized to a full, case-folded path so
     /// the same file always dedups to one tab regardless of how the path was spelled.</summary>

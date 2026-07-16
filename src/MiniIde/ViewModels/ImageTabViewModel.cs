@@ -1,5 +1,4 @@
 using System;
-using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 
 namespace MiniIde.ViewModels;
@@ -14,6 +13,4 @@ public class ImageTabViewModel : TabViewModelBase
         try { Image = new Bitmap(filePath); }
         catch (Exception ex) { Error = $"Failed to decode: {ex.Message}"; }
     }
-
-    public override Task SaveAsync() => Task.CompletedTask;
 }

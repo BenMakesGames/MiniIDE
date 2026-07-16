@@ -42,4 +42,5 @@ ultimately: to reach a point where I'm comfortable uninstalling Rider.
 1. custom window chrome
 2. scanning the entire solution when the IDE starts up
 3. settings that require a built-in search tool
+4. hand-typed edits — the editor is a read-only window onto an authoritative disk; external tools (the agentic AI, CLI git) do the writing, and the view reconciles disk → view on focus and before every operation. Operation-driven writes (NuGet, refactors) stay. Fixing a one-char typo now goes through the agent or an external editor — deliberately.
 

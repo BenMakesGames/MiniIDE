@@ -158,7 +158,8 @@
                     </TabControl.ItemTemplate>
                     <TabControl.DataTemplates>
                         <DataTemplate DataType="vm:EditorTabViewModel">
-                            <ae:TextEditor ShowLineNumbers="True"
+                            <ae:TextEditor IsReadOnly="True"
+                                           ShowLineNumbers="True"
                                            FontFamily="Consolas,monospace"
                                            FontSize="13"
                                            Background="#000000"

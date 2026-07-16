@@ -28,6 +28,27 @@ Roslyn forces per-project compile on `OpenSolutionAsync` — no true lazy. Split
 
 Historical worst case: 300 projects = hours ([roslyn#14325](https://github.com/dotnet/roslyn/issues/14325)). Report progress via `IProgress<ProjectLoadProgress>`. Set `SkipUnrecognizedProjects = true`.
 
+## Disk reconcile (read-only-view law)
+
+The editor is a read-only window onto disk; external tools own writes. `WorkspaceService.ReconcileWithDiskAsync`
+brings the snapshot up to date before every semantic query and on window focus. Strictly disk → view — it
+**never** `TryApplyChanges` (that would write the file back).
+
+- **Content drift** (same file set, changed text) → fork the immutable snapshot with `WithDocumentText`. Skip
+  files whose text already matches (`SourceText.ContentEquals`): a needless fork invalidates the cached
+  compilation and turns a warm query cold. Compare by **content, never mtime** — operation-writes bump mtime
+  without a real change; same-length overwrites change content mtime can't see.
+- **Structural drift** (file/project added/removed, `.csproj` edited) → `WithDocumentText` can't add/remove
+  documents, so tear down and rebuild via a fresh `OpenSolutionAsync`.
+- **Detecting structural drift cheaply & stably**: fingerprint the disk the *same way* on load and on each
+  check — `SolutionPersistence` project list + each `.csproj`'s content hash + the set of `.cs` paths under
+  each project dir (prune `IdeDirectories`). Disk-vs-disk, so a difference is a real change. Do **not** diff a
+  glob against Roslyn's document set — MSBuild's include list and a naive `**/*.cs` glob disagree (`<Compile
+  Remove>`, linked files), which would force a reload on every reconcile.
+- Keep `EnsureLoadedAsync`'s build-once early-return for the expensive cold start; the reconcile is the
+  separate refresh path layered on top. A `FileSystemWatcher` incremental cache is the future optimization —
+  today the reconcile reads all docs + walks project dirs per focus/op (fine for small solutions).
+
 ## MSBuild init
 
 Call `MSBuildLocator.RegisterDefaults()` **before** first Roslyn touch. Common gotcha.

@@ -137,13 +137,16 @@ public partial class MainWindowViewModel : ViewModelBase
         return tab;
     }
 
-    private async Task CloseTabAsync(TabViewModelBase tab)
+    // Returns Task (not async) so it still satisfies the RequestClose Func<,Task> contract: with save-on-close
+    // gone under the read-only law, nothing here awaits.
+    private Task CloseTabAsync(TabViewModelBase tab)
     {
         // Closing the tab that owns the live run silently stops its process (no confirmation dialog yet).
         if (ReferenceEquals(_liveRunTab, tab) && Run.IsRunning) { Run.Stop(); _liveRunTab = null; }
-        if (tab.IsDirty) await tab.SaveAsync();
+        // No save-on-close: the editor is a read-only window onto disk, so a closing tab has nothing to persist.
         Tabs.Remove(tab);
         if (ActiveTab == tab) ActiveTab = Tabs.Count > 0 ? Tabs[0] : null;
+        return Task.CompletedTask;
     }
 
     /// <summary>The output tab that owns the currently-live <see cref="RunService"/> process. Cleared only when
@@ -179,26 +182,60 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // ── Semantic queries ──────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Brings the Roslyn workspace up to date with what the user is actually looking at: loads it if
-    /// needed, then overlays every unsaved editor buffer. Every semantic query goes through this — skipping it
-    /// means resolving against the on-disk text, which after any length-changing edit silently returns
-    /// positions for the wrong symbol.
-    ///
-    /// <para>The buffers are snapshotted <b>before</b> the first await, on the caller's thread: AvaloniaEdit's
-    /// <c>TextDocument.Text</c> is thread-affine and every caller here originates on the UI thread.</para></summary>
+    /// <summary>Brings the Roslyn workspace up to date with the authoritative disk before a semantic query:
+    /// loads it if needed, then reconciles the snapshot against current file contents. Every semantic query
+    /// goes through this — skipping it means resolving against stale text, which after any length-changing
+    /// external edit silently returns positions for the wrong symbol. The reconcile reads disk itself (the
+    /// view holds no editable buffer to hand it), so nothing needs snapshotting before the first await.</summary>
     private async Task EnsureWorkspaceReadyAsync(CancellationToken ct = default)
     {
         if (Solution.SolutionPath is null) return;
-        var buffers = UnsavedBuffers();
         await Workspace.EnsureLoadedAsync(Solution.SolutionPath, ct);
-        await Workspace.SyncDocumentsAsync(buffers, ct);
+        await Workspace.ReconcileWithDiskAsync(ct);
     }
 
-    private List<(string Path, string Text)> UnsavedBuffers() =>
-        Tabs.OfType<EditorTabViewModel>()
-            .Where(t => t.IsDirty && t.FilePath is not null)
-            .Select(t => (t.FilePath!, t.Document.Text))
-            .ToList();
+    /// <summary>Focus-time refresh (wired to the window's <c>Activated</c> event): reflects any external edits
+    /// back into the view so it's never frozen on stale text. Reloads every open editor tab whose file drifted
+    /// on disk, and — only if the workspace was already loaded — reconciles the semantic snapshot too (focus
+    /// must never trigger the cold MSBuild load; that stays lazy, on first query). Errors report to the status
+    /// bar rather than throwing out of the <c>async void</c> event handler.</summary>
+    public async Task RefreshFromDiskAsync()
+    {
+        try
+        {
+            await ReloadDriftedTabsAsync();
+            if (Workspace.IsLoaded) await Workspace.ReconcileWithDiskAsync();
+        }
+        catch (Exception ex) { Status = ex.Message; }
+    }
+
+    /// <summary>Backs the explicit "Reload solution" command's snapshot half: forces a full workspace rebuild
+    /// (so structural changes are picked up) and reloads any drifted open tabs. The tree/project reload is the
+    /// command's own job; this refreshes the semantic snapshot that reload would otherwise leave stale.</summary>
+    public async Task ReloadWorkspaceAsync()
+    {
+        try
+        {
+            await Workspace.ReloadIfLoadedAsync();
+            await ReloadDriftedTabsAsync();
+        }
+        catch (Exception ex) { Status = ex.Message; }
+    }
+
+    /// <summary>Re-reads every open editor tab from disk and reflects any change back into the view. Content is
+    /// compared inside <see cref="EditorTabViewModel.ReloadFromDisk"/> (on the UI thread, where the document is
+    /// safe to read), so an unchanged file is a no-op — no flicker, no caret reset. Covers non-Roslyn tabs
+    /// (a <c>.md</c>, a <c>.json</c>) that the snapshot reconcile doesn't. A file that vanished or can't be read
+    /// is left as-is until the next refresh.</summary>
+    private async Task ReloadDriftedTabsAsync()
+    {
+        foreach (var tab in Tabs.OfType<EditorTabViewModel>().ToList())
+        {
+            if (tab.FilePath is null || !File.Exists(tab.FilePath)) continue;
+            try { tab.ReloadFromDisk(await File.ReadAllTextAsync(tab.FilePath)); }
+            catch { /* transient IO or a file mid-write; try again on the next focus */ }
+        }
+    }
 
     /// <summary>Navigates to the definition of the symbol at <paramref name="caretOffset"/>, reporting the
     /// outcome to the status bar. Owns the whole flow — the view supplies the caret and nothing else.</summary>

@@ -5,12 +5,14 @@ using Xunit;
 
 namespace MiniIde.Tests;
 
-/// <summary>Guards the invariants of overlaying unsaved editor buffers onto the Roslyn snapshot.
+/// <summary>Guards the invariants of reconciling the Roslyn snapshot against the authoritative disk (the IDE
+/// is a read-only window; external tools own the writes — see README's "no hand-typed edits" law). Each case
+/// simulates the external tool by editing files on disk directly, then reconciling.
 ///
-/// <para>The load-bearing one is <see cref="SyncDocuments_NeverWritesToDisk"/>: the obvious implementation
-/// (<c>MSBuildWorkspace.TryApplyChanges</c>) <em>persists the new text to the file</em>, which would silently
-/// autosave the user's buffer. If someone "simplifies" <c>SyncDocumentsAsync</c> into using it, that test is
-/// what fails.</para></summary>
+/// <para>The load-bearing one is <see cref="Reconcile_NeverWritesToDisk"/>: the obvious overlay implementation
+/// (<c>MSBuildWorkspace.TryApplyChanges</c>) <em>persists text to the file</em>. Under a disk → view law that
+/// would write back to the very disk it's meant to only read. If someone "simplifies"
+/// <c>ReconcileWithDiskAsync</c> into using it, that test is what fails.</para></summary>
 public sealed class WorkspaceServiceTests : IAsyncLifetime
 {
     // A minimal but real solution on disk: MSBuildWorkspace needs to actually evaluate and restore something.
@@ -74,11 +76,11 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
         """;
 
     // Same file, but with a line inserted ABOVE the definitions — this is what shifts every offset below it,
-    // and it is precisely the case where resolving against the on-disk text returns the wrong symbol.
+    // and it is precisely the case where resolving against a stale snapshot returns the wrong symbol.
     private const string Edited = """
         namespace Lib;
 
-        // a comment the user just typed, shifting everything below it down a line
+        // a comment an external tool just wrote, shifting everything below it down a line
         public static class Code
         {
             public static int Target() => 42;
@@ -103,44 +105,49 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GoToDefinition_ResolvesAgainstTheUnsavedBuffer_NotTheFileOnDisk()
+    public async Task GoToDefinition_ResolvesAgainstAFreshExternalDiskEdit()
     {
-        // The user typed a new line at the top but hasn't saved. The definition has moved down one line, and
-        // the caret offset the editor reports is an offset into the EDITED text.
-        await _workspace.SyncDocumentsAsync([(_fx.SourcePath, Edited)], Ct);
+        // An external tool inserted a new line at the top. The definition has moved down one line, and the
+        // caret offset the editor reports is an offset into the EDITED text now on disk.
+        await File.WriteAllTextAsync(_fx.SourcePath, Edited, Ct);
+        await _workspace.ReconcileWithDiskAsync(Ct);
 
         var definition = await _workspace.GoToDefinitionAsync(_fx.SourcePath, OffsetOfCallSite(Edited), Ct);
 
         definition.ShouldNotBeNull();
         definition.Line.ShouldBe(LineOf(Edited, "public static int Target()"));
 
-        // ...and that is genuinely a different line from the on-disk answer — i.e. this test would pass
-        // vacuously if the overlay did nothing.
+        // ...and that is genuinely a different line from the pre-edit answer — i.e. this test would pass
+        // vacuously if the reconcile did nothing.
         LineOf(Edited, "public static int Target()")
             .ShouldNotBe(LineOf(Original, "public static int Target()"));
     }
 
     [Fact]
-    public async Task SyncDocuments_NeverWritesToDisk()
+    public async Task Reconcile_NeverWritesToDisk()
     {
+        // The external tool already wrote the edit; the reconcile only reflects it inward.
+        await File.WriteAllTextAsync(_fx.SourcePath, Edited, Ct);
         var before = await File.ReadAllTextAsync(_fx.SourcePath, Ct);
         var stampBefore = File.GetLastWriteTimeUtc(_fx.SourcePath);
 
-        await _workspace.SyncDocumentsAsync([(_fx.SourcePath, Edited)], Ct);
+        await _workspace.ReconcileWithDiskAsync(Ct);
 
-        // MSBuildWorkspace.TryApplyChanges would have saved the buffer here, silently autosaving the user's
-        // file. Forking the immutable snapshot must not touch the filesystem at all.
+        // MSBuildWorkspace.TryApplyChanges would have written the snapshot back to the file here. Under the
+        // read-only law reconciliation is strictly disk → view: forking the immutable snapshot must not touch
+        // the filesystem at all.
         (await File.ReadAllTextAsync(_fx.SourcePath, Ct)).ShouldBe(before);
         File.GetLastWriteTimeUtc(_fx.SourcePath).ShouldBe(stampBefore);
     }
 
     [Fact]
-    public async Task SyncDocuments_IsANoOpForTextThatAlreadyMatches()
+    public async Task Reconcile_IsANoOpForTextThatAlreadyMatches()
     {
-        // Re-applying identical text would still invalidate the cached compilation, turning every warm
-        // semantic query back into a cold one. Syncing the same text twice must leave the results identical.
-        await _workspace.SyncDocumentsAsync([(_fx.SourcePath, Original)], Ct);
-        await _workspace.SyncDocumentsAsync([(_fx.SourcePath, Original)], Ct);
+        // Nothing changed on disk, so the snapshot already matches. Reconciling twice must fork nothing (a
+        // needless WithDocumentText would invalidate the cached compilation, turning warm queries cold) and
+        // leave the results identical.
+        await _workspace.ReconcileWithDiskAsync(Ct);
+        await _workspace.ReconcileWithDiskAsync(Ct);
 
         var definition = await _workspace.GoToDefinitionAsync(_fx.SourcePath, OffsetOfCallSite(Original), Ct);
 
@@ -149,13 +156,39 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SyncDocuments_IgnoresOpenFilesThatArentPartOfTheSolution()
+    public async Task Reconcile_IgnoresFilesWithNoRoslynDocument()
     {
         var readme = Path.Combine(_fx.Root, "README.md");
         await File.WriteAllTextAsync(readme, "# not a document Roslyn knows about", Ct);
 
-        // Should not throw — an open .md tab is dirty like any other, and simply has no Roslyn document.
-        await Should.NotThrowAsync(() => _workspace.SyncDocumentsAsync([(readme, "# edited")], Ct));
+        // A .md is not a Roslyn document and not a .cs, so the disk-driven reconcile neither overlays it nor
+        // treats it as structural drift — it is ignored without throwing.
+        await Should.NotThrowAsync(() => _workspace.ReconcileWithDiskAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Reconcile_PicksUpAnExternallyAddedFile()
+    {
+        // Structural drift: an external tool added a whole new source file to the project. WithDocumentText
+        // cannot add a document, so the reconcile must notice and rebuild — after which the new file's call
+        // site to Target() is a genuine reference.
+        var added = Path.Combine(_fx.Root, "More.cs");
+        await File.WriteAllTextAsync(added, """
+            namespace Lib;
+
+            public static class More
+            {
+                public static int Use() => Code.Target();
+            }
+            """, Ct);
+
+        await _workspace.ReconcileWithDiskAsync(Ct);
+
+        var declarationOffset = Original.IndexOf("Target() => 42", StringComparison.Ordinal);
+        var references = await _workspace.FindReferencesAsync(_fx.SourcePath, declarationOffset, Ct);
+
+        references.ShouldNotBeNull();
+        references.ShouldContain(r => Path.GetFullPath(r.Location.File) == Path.GetFullPath(added));
     }
 
     [Fact]

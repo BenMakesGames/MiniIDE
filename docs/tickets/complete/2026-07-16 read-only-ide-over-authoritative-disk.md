@@ -124,3 +124,75 @@ Add the "no hand-typed edits" law next to the existing "custom window chrome" en
 - [ ] **Content-hash, not mtime**: perform an operation-write (e.g. NuGet add) that touches project files but leaves an open source tab's content identical → that tab does not visibly reload/flicker. Overwrite a file with same-length but different content externally → focus reflects the change.
 - [ ] Close a tab (including one whose file was externally modified) → nothing is written to disk; the external content is preserved.
 - [ ] No exceptions in the status bar or debug output throughout.
+
+## Learnings
+
+### Verification gap (important)
+This ran in a headless remote environment with **no .NET SDK**, and the egress policy blocked downloading
+one (`builds.dotnet.microsoft.com` → 403). So the two automated Test-Plan items — `dotnet build` and
+`dotnet test` (incl. the re-founded `WorkspaceServiceTests`) — and every manual/GUI item (the app is a
+Windows `WinExe` Avalonia app) **could not be exercised here**. The change was verified by close code
+inspection and grep only. Anyone picking this up should run `dotnet build`/`dotnet test` and the manual
+Test Plan before trusting it. The grep-clean criterion *was* verifiable and passed (only the deliberately-kept
+`GoToDefinition_ResolvesAgainstTheOnDiskTextWhenNothingIsDirty` test name contains "Dirty").
+
+### Architectural decisions
+- **Open Decision 1 (reconcile scope) — tuned from the default.** The default was "open tabs only." That
+  fails the *unopened-file-feeding-a-query* Test-Plan item: F12 from an open file into an externally-edited
+  **unopened** file needs that file's snapshot current, and we can't know the target before resolving. So the
+  content-drift pass (`OverlayDiskTextAsync`) reconciles **every** solution document by content hash, not just
+  open tabs. Reads are cheap; the expensive thing (`WithDocumentText`, which busts the cached compilation) is
+  still guarded by `ContentEquals`, so an unchanged file costs at most a read. GTFO #2 (no *startup* scan) is
+  untouched — this is a focus/pre-op refresh — and content-hash-not-mtime is kept. Cost note below.
+- **Open Decision 2 (structural drift) — a self-consistent disk fingerprint.** Rather than diff a disk glob
+  against Roslyn's document set (which risks perpetual reloads when MSBuild's include list and a naive `**/*.cs`
+  glob disagree), `ComputeManifestFingerprintAsync` computes the **same** fingerprint on load and on every
+  reconcile: project files by *content hash* (a `.csproj` edit changes what compiles → reload) + the *set* of
+  `.cs` paths under each project dir (pruning `IdeDirectories` so `obj`/`bin` generated sources don't cause
+  churn). Because it's disk-vs-disk (never disk-vs-MSBuild), a difference means the disk structure actually
+  changed. A structural difference → full `OpenSolutionAsync` rebuild (`WithDocumentText` can't add/remove
+  documents); everything else is content drift → overlay.
+- **Open Decision 3 (where the read lives) — in the service.** `SyncDocumentsAsync(buffers)` became
+  `ReconcileWithDiskAsync()`: the service reads disk itself, so the overlay source is unambiguously disk and
+  the VM no longer snapshots thread-affine `TextDocument.Text` before an await.
+- **Open Decision 4 (tab reload granularity) — whole `Document.Text`.** `EditorTabViewModel.ReloadFromDisk`
+  replaces the whole buffer (marshalled to the UI thread), guarded by a content compare so an unchanged file
+  is a no-op. Scroll/caret reset on a real reload is accepted (editor is read-only; nothing to preserve).
+
+### Problems encountered / gotchas
+- **Nullable warning on `Header`.** The ticket said simplify to "just `Path.GetFileName(FilePath)`", but under
+  `<Nullable>enable</Nullable>` that returns `string?` → CS8603 on the non-nullable `Header`. Used
+  `Path.GetFileName(FilePath) ?? ""` (fileless tabs override `Header` anyway) to stay warning-free and
+  null-safe per CLAUDE.md.
+- **CS1998 on `CloseTabAsync`.** Dropping the save-on-close removed its only `await`, so it changed from
+  `async Task` to `Task`-returning with `return Task.CompletedTask` — still satisfies the `RequestClose`
+  `Func<,Task>` contract without the empty-async-method warning.
+- **Two `Document.TextChanged` subscriptions.** The `IsDirty`-setting one in `EditorTabViewModel` was deleted;
+  the re-highlight one in `TabEditorBinder` was kept and now fires when a tab is reloaded from disk (setting
+  `Document.Text` trips it), so no extra redraw wiring was needed.
+
+### Cost / limitations (revisitable)
+- **Reconcile cost.** The content-drift pass reads every solution document, and the manifest walk enumerates
+  every project dir + hashes every `.csproj` — on *every* pre-op **and** on window focus (only when already
+  loaded). Fine for this app's small personal solutions; a `FileSystemWatcher`-driven incremental cache is the
+  documented future optimization (explicitly out of scope). The reconcile currently runs on whatever thread the
+  awaits resume on (the UI thread for focus/pre-op callers); if a larger solution ever makes focus janky, move
+  the reconcile body off the UI thread (the Constraints note blesses this now that the source is disk, not a
+  thread-affine buffer) — e.g. `Task.Run` like `GetDiagnosticsAsync`, or `ConfigureAwait(false)` inside the
+  service.
+- **Structural reload disposes the workspace.** `LoadSolutionAsync` now disposes and recreates `_ws` on a
+  structural reload (it only ever created it before). A focus-triggered structural reload could, in a narrow
+  window, dispose `_ws` while a background `GetDiagnosticsAsync` compile is still running against the old
+  snapshot — surfacing as a one-off failed Problems refresh (observed by its awaiter, not an app crash).
+  Rare (structural reloads only fire on file/project add/remove) and recoverable; a proper fix would gate
+  diagnostics and reload against each other. Left as a follow-up.
+
+### Rejected alternatives
+- **Diffing a disk glob against Roslyn's document set** for structural drift — rejected: a naive `**/*.cs`
+  glob and MSBuild's actual include (`<Compile Remove>`, linked files, etc.) can disagree, which would trigger
+  a full reload on every reconcile forever. The disk-vs-disk fingerprint avoids this by construction.
+- **mtime-based drift** — rejected per the ticket: operation-writes bump mtime without a meaningful change,
+  and same-length overwrites change content mtime can't reveal. Content hash (`.csproj`) / `ContentEquals`
+  (source) is the only reliable signal.
+- **Open-tabs-only reconcile** (the Open Decision 1 default) — rejected because it can't satisfy the
+  unopened-file-feeding-a-query case; see above.

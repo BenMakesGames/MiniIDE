@@ -560,6 +560,10 @@ public partial class MainWindow : Window
                         break;
                     case "CtxFindUsagesItem":
                     case "CtxGoToDefItem":
+                    case "CtxRenameItem":
+                        // Same cheap synchronous gate as Find usages: a resolvable identifier under the caret in
+                        // a C# tab. Whether the symbol is actually renameable (defined in this solution, not a
+                        // framework type) is the authoritative in-source check at invoke time — see RenameSymbolAsync.
                         mi.IsEnabled = context.SymbolEligible;
                         break;
                 }
@@ -588,4 +592,21 @@ public partial class MainWindow : Window
     private async void OnCtxFindUsagesClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
     private async void OnCtxGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
+
+    private async void OnCtxRenameClick(object? sender, RoutedEventArgs e) => await RenameSymbolAsync();
+
+    // Hands the VM the caret + the editor's current text (for the freshness gate) and a way to prompt for the
+    // new name; the VM owns the refactor and all status reporting, the view owns only the modal dialog.
+    private async Task RenameSymbolAsync()
+    {
+        var editor = FindActiveEditor();
+        if (editor?.Document is null) return;
+        await Vm.RenameSymbolAsync(
+            Vm.ActiveTab!.FilePath!, editor.CaretOffset, editor.Document.Text, PromptForNewNameAsync);
+    }
+
+    // Shows the modal new-name dialog over this window. Returns the entered valid name, or null when the user
+    // cancels (or the name was blank / unchanged / not a valid identifier — the dialog can't return those).
+    private Task<string?> PromptForNewNameAsync(string currentName) =>
+        new RenameDialog(currentName).ShowDialog<string?>(this);
 }

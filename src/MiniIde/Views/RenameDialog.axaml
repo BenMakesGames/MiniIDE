@@ -1,0 +1,28 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="380" d:DesignHeight="170"
+        x:Class="MiniIde.Views.RenameDialog"
+        Title="Rename symbol"
+        Width="380" SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#1E1E22">
+    <StackPanel Margin="16" Spacing="10">
+        <TextBlock Text="New name" Foreground="#DCDCDC"/>
+        <TextBox Name="NameBox"
+                 Foreground="#DCDCDC"
+                 FontFamily="Consolas,monospace"
+                 TextChanged="OnNameChanged"/>
+        <TextBlock Text="Renames every reference across the solution and writes to disk. There is no undo — git is your safety net."
+                   TextWrapping="Wrap"
+                   FontSize="12"
+                   Foreground="#9AA0A6"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button Name="OkButton" Content="Rename" IsDefault="True" Click="OnOk"/>
+            <Button Content="Cancel" IsCancel="True" Click="OnCancel"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

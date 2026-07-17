@@ -264,4 +264,114 @@ public partial class MainWindowViewModel : ViewModelBase
         Find.ShowReferences(references);
         Status = Find.Status;
     }
+
+    /// <summary>Renames the symbol at <paramref name="caretOffset"/> solution-wide, writing every reference (and
+    /// the type-matched file) to disk. Owns the whole flow: reconcile → freshness-guard the clicked offset →
+    /// prompt (via <paramref name="promptForNewName"/>, which the view fulfils with the modal dialog) → compute
+    /// against fresh disk → apply → reflect the writes back into the view.
+    ///
+    /// <para><paramref name="viewText"/> is the editor's current text; the caret offset indexes it, but the
+    /// refactor resolves on fresh disk. If the two have drifted, we do not guess a symbol from a stale offset —
+    /// the tab is reloaded and the user is asked to re-invoke on the refreshed token.</para></summary>
+    public async Task RenameSymbolAsync(
+        string file, int caretOffset, string viewText, Func<string, Task<string?>> promptForNewName)
+    {
+        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
+        Status = "Loading workspace (first use may take a while)...";
+        await EnsureWorkspaceReadyAsync();
+
+        // Freshness gate (guards resolution, not just the write): the offset is into the view's text, but the
+        // snapshot now reflects disk. If they differ, resolving would land on the wrong token — refresh instead.
+        string diskText;
+        try { diskText = await File.ReadAllTextAsync(file); }
+        catch (Exception ex) { Status = $"Could not read {Path.GetFileName(file)}: {ex.Message}"; return; }
+        if (!string.Equals(viewText, diskText, StringComparison.Ordinal))
+        {
+            await ReloadDriftedTabsAsync();
+            Status = "File changed on disk — view refreshed. Re-invoke Rename on the symbol.";
+            return;
+        }
+
+        var target = await Workspace.DescribeRenameTargetAsync(file, caretOffset);
+        if (target is null) { Status = "No symbol to rename here"; return; }
+        if (!target.InSolution) { Status = "Only symbols defined in this solution can be renamed"; return; }
+
+        var newName = await promptForNewName(target.Name);
+        if (string.IsNullOrEmpty(newName) || string.Equals(newName, target.Name, StringComparison.Ordinal))
+        { Status = "Rename cancelled"; return; }
+
+        RenameOutcome outcome;
+        try { outcome = await Workspace.ComputeRenameAsync(file, caretOffset, newName); }
+        catch (Exception ex) { Status = $"Rename failed: {ex.Message}"; return; }
+
+        switch (outcome.Status)
+        {
+            case RenameStatus.NoSymbol: Status = "No symbol to rename here"; return;
+            case RenameStatus.NotInSolution: Status = "Only symbols defined in this solution can be renamed"; return;
+            case RenameStatus.Conflicts:
+                Status = $"Rename blocked — {string.Join("; ", outcome.Conflicts)}. Nothing written.";
+                return;
+        }
+
+        try { RenameService.ApplyToDisk(outcome); }
+        catch (Exception ex) { Status = $"Rename failed writing to disk: {ex.Message}"; return; }
+
+        // Reflect the writes back into the view. Ticket 1's focus reconcile refreshes the snapshot and open
+        // tabs on content drift, but it does NOT touch the solution tree, and a moved file's tab is keyed to a
+        // path that no longer exists — so a file move needs an explicit tree-node replace + tab re-home here.
+        if (outcome.Move is { } move) await ApplyFileMoveToViewAsync(move.OldPath, move.NewPath);
+        await Workspace.ReconcileWithDiskAsync(); // structural (a move) rebuilds; content-only overlays
+        await ReloadDriftedTabsAsync();
+
+        var count = outcome.ChangedFiles.Count;
+        var files = count == 1 ? "file" : "files";
+        Status = outcome.Move is { } m
+            ? $"Renamed to {newName} across {count} {files}; {Path.GetFileName(m.OldPath)} → {Path.GetFileName(m.NewPath)}"
+            : $"Renamed to {newName} across {count} {files}";
+    }
+
+    /// <summary>Propagates a file rename into the view after the disk move: replaces the moved file's tree node
+    /// (its <c>Name</c>/<c>Path</c> are <c>init</c>-only, so it can't be mutated in place) and re-homes any tab
+    /// open on the old path (its <c>TabId</c> is get-only, so it must be closed and reopened). A case-only
+    /// rename leaves the case-folded <c>FileId</c> unchanged, so the tab identity is stable and only the tree
+    /// node needs replacing.</summary>
+    private async Task ApplyFileMoveToViewAsync(string oldPath, string newPath)
+    {
+        ReplaceTreeFileNode(oldPath, newPath);
+
+        var oldId = TabViewModelBase.FileId(oldPath);
+        if (string.Equals(oldId, TabViewModelBase.FileId(newPath), StringComparison.Ordinal)) return;
+
+        var open = Tabs.FirstOrDefault(t => t.TabId == oldId);
+        if (open is null) return;
+        var wasActive = ReferenceEquals(ActiveTab, open);
+        await CloseTabAsync(open);
+        if (wasActive) await OpenFileAsync(newPath);
+    }
+
+    private void ReplaceTreeFileNode(string oldPath, string newPath)
+    {
+        var oldFull = Path.GetFullPath(oldPath);
+        foreach (var root in Tree)
+            if (TryReplaceFileNode(root, oldFull, newPath)) return;
+    }
+
+    // Walks a subtree replacing the file node whose path matches. TreeNode has no parent back-pointer, so the
+    // replace happens from the parent while iterating its Children (an ObservableCollection, so the swap is what
+    // the UI observes). Case-insensitive path match, matching FindDocument / FileId's normalization.
+    private static bool TryReplaceFileNode(TreeNode parent, string oldFull, string newPath)
+    {
+        for (int i = 0; i < parent.Children.Count; i++)
+        {
+            var child = parent.Children[i];
+            if (child.Kind == NodeKind.File && child.Path is not null &&
+                string.Equals(Path.GetFullPath(child.Path), oldFull, StringComparison.OrdinalIgnoreCase))
+            {
+                parent.Children[i] = new TreeNode { Name = Path.GetFileName(newPath), Kind = NodeKind.File, Path = newPath };
+                return true;
+            }
+            if (TryReplaceFileNode(child, oldFull, newPath)) return true;
+        }
+        return false;
+    }
 }

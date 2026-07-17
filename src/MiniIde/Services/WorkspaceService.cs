@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -222,9 +223,10 @@ public class WorkspaceService : IDisposable
     }
 
     /// <summary>The symbol referenced or declared at <paramref name="position"/>, or null when the file isn't
-    /// in the solution or nothing resolves there. Shared by both symbol queries so they cannot disagree about
-    /// what "the symbol under the caret" means.</summary>
-    private async Task<ISymbol?> ResolveSymbolAsync(string filePath, int position, CancellationToken ct)
+    /// in the solution or nothing resolves there. Shared by go-to-definition, find-references, and the rename
+    /// path so none of them can disagree about what "the symbol under the caret" means — all resolve against
+    /// the same fresh-disk <see cref="_solution"/> snapshot.</summary>
+    public async Task<ISymbol?> ResolveSymbolAsync(string filePath, int position, CancellationToken ct = default)
     {
         var doc = FindDocument(filePath);
         if (doc is null) return null;
@@ -234,6 +236,35 @@ public class WorkspaceService : IDisposable
         var parent = root.FindToken(position).Parent;
         if (parent is null) return null;
         return model.GetSymbolInfo(parent, ct).Symbol ?? model.GetDeclaredSymbol(parent, ct);
+    }
+
+    /// <summary>Describes the symbol at <paramref name="position"/> for the rename UI without leaking a Roslyn
+    /// type to the view: its current name (to pre-fill the prompt) and whether it is defined in this solution's
+    /// source (only then is it renameable). Returns null when nothing resolves. Resolves against the fresh-disk
+    /// snapshot, so the caller must reconcile first (via <c>EnsureWorkspaceReadyAsync</c>).</summary>
+    public async Task<RenameTarget?> DescribeRenameTargetAsync(
+        string filePath, int position, CancellationToken ct = default)
+    {
+        var symbol = await ResolveSymbolAsync(filePath, position, ct);
+        if (symbol is null) return null;
+        var source = _solution is null ? null : await SymbolFinder.FindSourceDefinitionAsync(symbol, _solution, ct);
+        var inSolution = source is not null && source.Locations.Any(l => l.IsInSource);
+        return new RenameTarget((source ?? symbol).Name, inSolution);
+    }
+
+    /// <summary>Computes a solution-wide rename of the symbol at <paramref name="position"/> to
+    /// <paramref name="newName"/>, resolving against the fresh-disk snapshot and delegating the refactor to
+    /// <see cref="RenameService.ComputeAsync"/>. Returns a plain <see cref="RenameOutcome"/> — the
+    /// <c>_solution</c> and the <c>ISymbol</c> never leave the service. Computes only; the caller applies the
+    /// outcome to disk via <see cref="RenameService.ApplyToDisk"/>, so this method (like everything here) never
+    /// writes the filesystem.</summary>
+    public async Task<RenameOutcome> ComputeRenameAsync(
+        string filePath, int position, string newName, CancellationToken ct = default)
+    {
+        if (_solution is null) return RenameOutcome.NoSymbol();
+        var symbol = await ResolveSymbolAsync(filePath, position, ct);
+        if (symbol is null) return RenameOutcome.NoSymbol();
+        return await RenameService.ComputeAsync(_solution, symbol, newName, ct);
     }
 
     /// <summary>

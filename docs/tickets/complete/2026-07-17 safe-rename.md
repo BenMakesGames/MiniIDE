@@ -116,3 +116,97 @@ When the result carries conflict annotations, apply the chosen policy (Open Deci
 - [ ] **Manual — framework symbol**: right-click a framework symbol; confirm *Rename…* either doesn't apply or reports "only symbols defined in this solution can be renamed" with no changes.
 - [ ] **Manual — freshness drift**: with a file changed on disk out from under a stale view, invoke Rename; confirm it reconciles and asks for re-invoke rather than renaming the wrong symbol.
 - [ ] **Regression**: Search / Find usages / Go to definition still work and their enablement is unchanged.
+
+## Learnings
+
+### Verification gap (important — same as Ticket 1)
+This ran in a headless remote environment with **no .NET SDK** (`dotnet` absent everywhere; egress to fetch
+one is blocked). So **none** of the automated Test-Plan items ran — no `dotnet build`, no `dotnet test`
+(incl. the new `RenameServiceTests`) — and every manual/GUI item is unexercisable (the app is a Windows
+`WinExe` Avalonia app). The change was verified by **close code inspection only**. Anyone picking this up must
+run `dotnet build` / `dotnet test` and the manual Test Plan before trusting it. The one thing that genuinely
+couldn't be confirmed offline is the exact Roslyn assembly surface (see below) — build first.
+
+### The linchpin API (confirmed by knowledge, not by the assembly)
+`Renamer.RenameSymbolAsync(Solution, ISymbol, SymbolRenameOptions, string newName, CancellationToken)` →
+`Task<Solution>` lives in **`Microsoft.CodeAnalysis.Workspaces`** (namespace `Microsoft.CodeAnalysis.Rename`),
+a transitive dependency of the pinned `Microsoft.CodeAnalysis.CSharp.Workspaces` / `.Features` `5.6.0`. It has
+been the stable modern overload since the `SymbolRenameOptions` struct was introduced (Roslyn 4.1-era), so the
+code is written against it. `SymbolRenameOptions` is a record-struct with init flags
+`RenameOverloads` / `RenameInStrings` / `RenameInComments` / `RenameFile` — set `RenameFile: true`, the other
+three `false` (Open Decision 5). **This could not be checked against the restored DLL here** (nothing restored,
+no SDK); the very first thing a follow-up should do is `dotnet build` to confirm the signature resolves.
+
+### Architectural decisions
+- **Compute vs. apply split (and where the disk write lives).** `WorkspaceService`'s doc-comment is emphatic
+  that nothing in it reaches the filesystem (the read-only law). So the rename is split: `RenameService.ComputeAsync`
+  forks the immutable snapshot in memory and diffs it into a plain `RenameOutcome` (no Roslyn types leak), and
+  `RenameService.ApplyToDisk` is the **only** member that writes — mirroring `NuGetService.SetVersion`'s
+  closed-file write. `WorkspaceService.ComputeRenameAsync` orchestrates (resolve symbol against `_solution`,
+  delegate to `RenameService`) but still never writes. This keeps the "Roslyn stays inside Services; the VM
+  gets plain records" boundary the whole codebase already draws (`SourceLocation`, `FindHit`, `ProblemItem`).
+- **Open Decision 2 (conflicts) — a public collision check, not Roslyn's conflict annotations.** The ticket
+  asked to "collect Roslyn conflict annotations." In practice the **public** `RenameSymbolAsync` overload
+  resolves conflicts internally and does **not** surface its conflict-annotation objects (`RenameAnnotation`
+  and the `ConflictEngine` types are `internal`). So the collision the ticket's test cares about — the new name
+  already naming a member of the symbol's container — is detected up front via the public semantic model
+  (`INamespaceOrTypeSymbol.GetMembers(newName)`) and **blocks** the rename (default policy), surfacing the
+  clashing member in the status bar and writing nothing. Scoped to type members / types; locals & parameters
+  shadow legally and need scope analysis the public API doesn't expose, so they aren't policed. This is
+  deliberately a bit over-strict (a legal new overload is also blocked) — the ticket blessed "revisit if too
+  strict."
+- **Open Decision 3 (tree + moved tab) — explicit ripple, because Ticket 1's reconcile does *not* touch the
+  tree.** The default was "lean on Ticket 1's reconcile." But `RefreshFromDiskAsync`/`ReconcileWithDiskAsync`
+  only refresh the **semantic snapshot** and **open editor tabs** — the solution `Tree` is rebuilt solely by
+  `OpenSolutionAsync` (the "Reload solution" path). So a file move needs an explicit, surgical ripple:
+  `ReplaceTreeFileNode` swaps the moved file's `TreeNode` inside its parent's `Children` (the node's
+  `Name`/`Path` are `init`-only — replace, never mutate; and there's no parent back-pointer, so it walks from
+  the `Tree` roots), and `ApplyFileMoveToViewAsync` closes the tab keyed to the vanished `file:<oldpath>` and
+  reopens it at the new path **only if it was active** (reopening a background tab would steal focus; closing
+  it already satisfies the "no tab keyed to the vanished path" criterion). The snapshot (surface 3) is handled
+  by calling `ReconcileWithDiskAsync` after the write — a move is structural drift, so it triggers a full
+  reload; content-only renames go through the overlay.
+- **Two-level eligibility gate.** Menu-time stays the cheap synchronous `CodeSymbolContext.SymbolEligible`
+  (identical to Find usages — Open Decision 4), so *Rename…* lights up wherever Find usages would, including on
+  framework symbols. The **authoritative** "defined in this solution" gate is async and runs at invoke:
+  `DescribeRenameTargetAsync` resolves on fresh disk and checks `SymbolFinder.FindSourceDefinitionAsync` in
+  source **before** the dialog — a framework symbol reports to the status bar and never opens the prompt.
+- **Freshness gate compares view text to disk text.** The right-click offset indexes the *editor's* text, but
+  the refactor resolves on the fresh-disk snapshot. The VM reads the file and compares to the passed
+  `viewText`; on a mismatch it reloads the drifted tab and asks the user to re-invoke, rather than resolving a
+  symbol from a stale offset. Under the read-only law focus already reconciles tabs, so this is a rare-case
+  safety net, not the common path.
+
+### Problems encountered / gotchas
+- **`RenameFile` keeps the same `DocumentId`.** The file rename shows up as a *changed document* whose
+  `FilePath` differs between the old and new solutions — not as a remove+add. So the diff is
+  `updated.GetChanges(old).GetProjectChanges().GetChangedDocumentIds()`, and for each changed doc a differing
+  `FilePath` is recorded as the move (old → new); the renamed document's new text is written at the **new**
+  path. (If a future Roslyn ever models it as remove+add instead, this diff would miss the move — worth a
+  glance if the file-rename test ever fails.)
+- **Case-only file rename needs a temp hop.** `File.Move(Foo.cs, foo.cs)` on a case-insensitive filesystem
+  sees the destination as already existing; `ApplyToDisk` detects an ordinal-differs / ignore-case-equal move
+  and hops through a `.minirename.tmp` name. The VM also skips the tab re-home in that case — the case-folded
+  `FileId` is unchanged, so the tab identity is stable.
+- **The dialog is the app's first non-`MainWindow` `Window`.** Avalonia's source generator supplies
+  `InitializeComponent` and the named-control fields for a `partial Window` with `x:Class` — so `RenameDialog`
+  just calls `InitializeComponent()` (do **not** hand-write it or you double-declare the generated one, the
+  mistake I made and backed out). `IsDefault`/`IsCancel` on the buttons give Enter/Escape for free, and a
+  disabled default button won't fire on Enter, so no extra key handling was needed.
+
+### Related areas affected
+- `WorkspaceService.ResolveSymbolAsync` went **private → public** (unchanged behavior; go-to-def and find-refs
+  still call it). Anything that wants "the symbol under the caret" now shares one resolver.
+- Reused Ticket 1's `ReconcileWithDiskAsync` / `ReloadDriftedTabsAsync` for surfaces (3) and (2) of the ripple —
+  no parallel reload path invented, per the ticket's steer.
+
+### Rejected alternatives
+- **Full `OpenSolutionAsync` tree rebuild after a rename** (the other half of Open Decision 3) — rejected: it
+  re-reads the whole solution and drops tree expansion state for a single-file rename. The surgical node swap
+  is cheaper and keeps the tree's state.
+- **Handing the `ISymbol` to the VM and calling `RenameService` from there** (a literal reading of Impl steps
+  2–3) — rejected to preserve the codebase's "no Roslyn types above the service layer" boundary; the VM gets a
+  plain `RenameOutcome`/`RenameTarget` instead, and `WorkspaceService` pairs the private `_solution` with the
+  resolved symbol internally.
+- **Exposing `_solution` publicly** so a caller could drive `Renamer` directly — rejected: it breaks the
+  snapshot encapsulation the class doc-comment guards and leaks Roslyn everywhere.

@@ -173,6 +173,8 @@
                                         <MenuItem Name="CtxSearchItem" Header="Search solution" InputGesture="Ctrl+Shift+F" Click="OnCtxSearchClick"/>
                                         <MenuItem Name="CtxFindUsagesItem" Header="Find usages" InputGesture="Shift+F12" Click="OnCtxFindUsagesClick"/>
                                         <MenuItem Name="CtxGoToDefItem" Header="Go to definition" InputGesture="F12" Click="OnCtxGoToDefClick"/>
+                                        <Separator/>
+                                        <MenuItem Name="CtxRenameItem" Header="Rename…" Click="OnCtxRenameClick"/>
                                     </ContextMenu>
                                 </ae:TextEditor.ContextMenu>
                             </ae:TextEditor>

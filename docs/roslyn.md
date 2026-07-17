@@ -69,6 +69,28 @@ Semantic spans (type vs var vs method) — need `Compilation` + refs. Minimum `A
 - `Diagnostic.Location` → `(file, line, col)`: same mapping as go-to-def — `GetLineSpan()` → `SourceTree.FilePath`, `StartLinePosition.Line + 1`, `.Character + 1`.
 - Compiling every project is the cold-start cost — run off the UI thread (already `async`), honor `ct` between projects, emit per-project progress via the existing `Progress` event. Map to plain model records; keep Roslyn types inside the service.
 
+## Rename (safe solution-wide refactor)
+
+`Renamer.RenameSymbolAsync(Solution, ISymbol, SymbolRenameOptions, string newName, ct)` → `Task<Solution>`.
+Lives in **`Microsoft.CodeAnalysis.Workspaces`** (namespace `Microsoft.CodeAnalysis.Rename`) — transitively
+present via `Microsoft.CodeAnalysis.CSharp.Workspaces`. Forks the immutable snapshot; **doesn't** write disk.
+
+- `SymbolRenameOptions` is a record-struct: `RenameOverloads` / `RenameInStrings` / `RenameInComments` /
+  `RenameFile` init flags. For code-references-only + file-rename-on-type-match, set `RenameFile: true`, rest
+  `false`.
+- **Gate on in-source first**: `SymbolFinder.FindSourceDefinitionAsync(symbol, solution, ct)` — null (or no
+  in-source location) means a framework/NuGet symbol; refuse (no metadata-as-source rewrite).
+- **`RenameFile: true` keeps the same `DocumentId`** and changes its `FilePath`. Diff via
+  `updated.GetChanges(old).GetProjectChanges().GetChangedDocumentIds()`; a differing `FilePath` on a changed
+  doc **is** the file move (old → new), and the renamed doc's new text belongs at the *new* path.
+- **Conflicts aren't publicly readable.** The public overload resolves them internally; `RenameAnnotation` /
+  the `ConflictEngine` types are `internal`. To block on the common "new name already names a member" case, do
+  a pre-flight `INamespaceOrTypeSymbol.GetMembers(newName)` check on the symbol's container instead.
+- **Persist explicitly, never `TryApplyChanges`** (which writes via the workspace and fights the read-only
+  law): pull each changed doc's text and `File.WriteAllText`; `File.Move` the type-matched file (move first, so
+  no content write targets a path the move invalidates). Case-only file renames need a temp-name hop on
+  case-insensitive filesystems.
+
 ## API map
 
 | Feature | API |
@@ -77,3 +99,4 @@ Semantic spans (type vs var vs method) — need `Compilation` + refs. Minimum `A
 | Jump-to-def | `SymbolFinder.FindSourceDefinitionAsync` |
 | Find usages | `SymbolFinder.FindReferencesAsync` |
 | Errors/warnings | `Compilation.GetDiagnostics` |
+| Safe rename | `Renamer.RenameSymbolAsync` (+ `SymbolRenameOptions`) |

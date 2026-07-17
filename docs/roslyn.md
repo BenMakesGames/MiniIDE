@@ -34,10 +34,23 @@ The editor is a read-only window onto disk; external tools own writes. `Workspac
 brings the snapshot up to date before every semantic query and on window focus. Strictly disk → view — it
 **never** `TryApplyChanges` (that would write the file back).
 
+Two modes. Normally it drains a **pending-set** the OS change feed pushed in (`MarkPathsChanged`) and overlays
+only those documents. `RequestFullRescan` (cold start, structural change, watcher overflow, focus, or no
+watcher at all) falls back to the whole-solution pass. See `disk-watching.md` for the feed.
+
 - **Content drift** (same file set, changed text) → fork the immutable snapshot with `WithDocumentText`. Skip
   files whose text already matches (`SourceText.ContentEquals`): a needless fork invalidates the cached
   compilation and turns a warm query cold. Compare by **content, never mtime** — operation-writes bump mtime
   without a real change; same-length overwrites change content mtime can't see.
+- **Two gates, not one.** A `(LastWriteTimeUtc, Length)` stamp decides whether to **read**; content decides
+  whether to **fork**. The stamp is a read pre-filter, *not* a drift decision — that's what keeps
+  content-never-mtime intact. Only the fallback poll can miss a change preserving **both** mtime and length;
+  the watcher fires on the write regardless, so the primary path still catches it.
+- **Invariant that makes stamps safe**: write a stamp *only* alongside the read that produced the snapshot's
+  text, and *sample it before* that read. Every stamp then describes a disk state at or before the snapshot's
+  content, so a write racing a read leaves a stale stamp and is re-read. Stamps cost redundant reads, never
+  missed changes. (Corollary: never stamp at load time — a load stamped after `OpenSolutionAsync` would record
+  a racing write's own stamp and swallow it.)
 - **Structural drift** (file/project added/removed, `.csproj` edited) → `WithDocumentText` can't add/remove
   documents, so tear down and rebuild via a fresh `OpenSolutionAsync`.
 - **Detecting structural drift cheaply & stably**: fingerprint the disk the *same way* on load and on each
@@ -46,8 +59,11 @@ brings the snapshot up to date before every semantic query and on window focus. 
   glob against Roslyn's document set — MSBuild's include list and a naive `**/*.cs` glob disagree (`<Compile
   Remove>`, linked files), which would force a reload on every reconcile.
 - Keep `EnsureLoadedAsync`'s build-once early-return for the expensive cold start; the reconcile is the
-  separate refresh path layered on top. A `FileSystemWatcher` incremental cache is the future optimization —
-  today the reconcile reads all docs + walks project dirs per focus/op (fine for small solutions).
+  separate refresh path layered on top.
+- Both gates are counted (`Stats()`: documents stat'd → read → forked): read/stat is the stamp gate's payoff,
+  fork/read is the content gate's. See `disk-watching.md §Observing it`.
+- The fallback pass is O(documents) in `stat`s but only O(changed) in reads, so an idle focus does zero reads.
+  The manifest walk still hashes every `.csproj` on that pass.
 
 ## MSBuild init
 

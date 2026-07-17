@@ -335,6 +335,122 @@
                             <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4"/>
                         </Grid>
                     </TabItem>
+
+                    <!-- Read-only observation of the OS-driven disk reconcile: it changes no behavior. Text-dense
+                         and deliberately chart-free.
+
+                         Laid out for the shape this panel actually is — wide and short. The counters are
+                         fixed-width tiles in a WrapPanel, so they spend the abundant axis (horizontal) and
+                         reflow into fewer columns as the window narrows, instead of stacking into a tall gutter
+                         that scrolls while the right half sits empty. ItemWidth is the auto-repeating-column
+                         knob: WrapPanel gives CSS's `repeat(auto-fill, 190px)`, not `minmax(190px, 1fr)` —
+                         there is no stretch-to-fill, so the last column leaves a remainder. The real
+                         minmax analogue is ItemsRepeater + UniformGridLayout MinItemWidth, which needs an
+                         ItemsSource; these five tiles are heterogeneous static content, so it doesn't fit.
+
+                         The log then takes the full width of the star row: its rows are the widest thing here
+                         (time + kind + count + a path), and it's the part worth the space. -->
+                    <TabItem Header="Disk" x:Name="DiskTab">
+                        <Grid RowDefinitions="Auto,Auto,*" DataContext="{Binding DiskInsight}">
+                            <DockPanel Grid.Row="0" Margin="4">
+                                <Button DockPanel.Dock="Right" Content="Reset" Command="{Binding ResetCommand}"
+                                        ToolTip.Tip="Rebase the counters and clear the log, to watch one burst"/>
+                                <Panel DockPanel.Dock="Left" Width="8" Height="8" Margin="0,0,6,0"
+                                       VerticalAlignment="Center">
+                                    <Ellipse Fill="#4EC9B0" IsVisible="{Binding IsWatching}"/>
+                                    <Ellipse Fill="#808080" IsVisible="{Binding !IsWatching}"/>
+                                </Panel>
+                                <TextBlock Text="{Binding WatchStatus}" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
+
+                            <WrapPanel Grid.Row="1" Margin="4,0,4,4" ItemWidth="190">
+                                <StackPanel Margin="0,0,12,8">
+                                    <TextBlock Text="Feed" FontWeight="Bold" Margin="0,0,0,2"/>
+                                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Events seen"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding EventsSeen}"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Pruned"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding EventsPruned}"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Muted"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding EventsMuted}"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Signals raised"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SignalsRaised}"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Overflows"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Overflows}"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel Margin="0,0,12,8">
+                                    <TextBlock Text="Reconcile funnel" FontWeight="Bold" Margin="0,0,0,2"/>
+                                    <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto,Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Stat'd"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DocumentsStatted}"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Read"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DocumentsRead}"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ReadRatio}"
+                                                   Foreground="#808080" Margin="6,0,0,0"
+                                                   ToolTip.Tip="Read / stat'd — the stamp gate's payoff"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Forked"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DocumentsForked}"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding ForkRatio}"
+                                                   Foreground="#808080" Margin="6,0,0,0"
+                                                   ToolTip.Tip="Forked / read — content is the fork arbiter"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel Margin="0,0,12,8">
+                                    <TextBlock Text="Modes" FontWeight="Bold" Margin="0,0,0,2"/>
+                                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Drains"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Drains}"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Full rescans"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding FullRescans}"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Structural reloads"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding StructuralReloads}"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel Margin="0,0,12,8">
+                                    <TextBlock Text="Pending overlay" FontWeight="Bold" Margin="0,0,0,2"/>
+                                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Paths"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding PendingCount}"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Rescan queued"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding NeedsFullRescan}"/>
+                                    </Grid>
+                                    <!-- Capped: an agent burst can leave dozens of paths pending, and the band
+                                         must not grow to fit them and re-steal the log's height. -->
+                                    <ScrollViewer MaxHeight="52" Margin="0,2,0,0">
+                                        <TextBlock Text="{Binding PendingPaths}" Foreground="#808080"/>
+                                    </ScrollViewer>
+                                </StackPanel>
+
+                                <StackPanel Margin="0,0,12,8">
+                                    <TextBlock Text="Open tabs" FontWeight="Bold" Margin="0,0,0,2"/>
+                                    <ScrollViewer MaxHeight="70">
+                                        <TextBlock Text="{Binding StaleTabs}" Foreground="#808080"/>
+                                    </ScrollViewer>
+                                </StackPanel>
+                            </WrapPanel>
+
+                            <ListBox Grid.Row="2" Background="#000000" Margin="4,0,4,4"
+                                     ItemsSource="{Binding Signals}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate DataType="vm:DiskSignalRow">
+                                        <Grid ColumnDefinitions="Auto,Auto,Auto,*">
+                                            <TextBlock Grid.Column="0" Text="{Binding Time}" Foreground="#808080"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding Kind}"
+                                                       Foreground="{Binding KindColor}" Margin="10,0,0,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding Paths}" Margin="10,0,0,0"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding Detail}" Margin="10,0,0,0"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </TabItem>
                 </TabControl>
 
                 <!-- The band is exactly as tall as the tab-header strip, so centering the toggle inside it lines the

@@ -17,6 +17,7 @@ public partial class MainWindowViewModel : ViewModelBase
 {
     public SolutionService Solution { get; }
     public WorkspaceService Workspace { get; }
+    public SolutionWatcher Watcher { get; }
     public SearchService Search { get; }
     public NuGetService NuGet { get; }
     public RunService Run { get; }
@@ -25,6 +26,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public FindResultsViewModel Find { get; }
     public ProblemsViewModel Problems { get; }
+    public DiskInsightViewModel DiskInsight { get; }
     public NuGetViewModel NuGetVm { get; }
 
     public ObservableCollection<TreeNode> Tree { get; } = new();
@@ -47,6 +49,8 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         Solution = new SolutionService();
         Workspace = new WorkspaceService();
+        Watcher = new SolutionWatcher();
+        Watcher.Changed += OnDiskChanged;
         Search = new SearchService();
         NuGet = new NuGetService();
         Run = new RunService();
@@ -55,6 +59,9 @@ public partial class MainWindowViewModel : ViewModelBase
         Workspace.Progress += m => Dispatcher.UIThread.Post(() => Status = m);
         Find = new FindResultsViewModel(Search, Solution, OpenAsync);
         Problems = new ProblemsViewModel(Workspace, Solution, EnsureWorkspaceReadyAsync, OpenAsync);
+        // Constructed at startup, not lazily on first show: its Changed subscription is the panel's signal log,
+        // and it has to be live before any solution opens or the first burst goes unrecorded.
+        DiskInsight = new DiskInsightViewModel(Workspace, Watcher, () => Tabs.OfType<EditorTabViewModel>());
         NuGetVm = new NuGetViewModel(NuGet, ResolveNuGetOutput, ResolveNuGetMetadataTab);
     }
 
@@ -86,18 +93,32 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             Status = "Loading solution...";
-            var projectNodes = await Solution.LoadAsync(path);
-            Tree.Clear();
-            foreach (var n in projectNodes) Tree.Add(n);
-            Projects.Clear();
-            foreach (var e in Solution.Projects) Projects.Add(e);
-            NuGetVm.SetProjects(Solution.Projects);
-            StartupProject = PickDefaultStartup(Solution.Projects);
+            await LoadTreeAsync(path);
             SolutionName = Path.GetFileNameWithoutExtension(path);
             Problems.NotifyCanRefreshChanged();
+            // (Re)point the OS change feed at this solution — this is also the restart on "Reload solution"
+            // and on opening a different solution. If it can't start, the workspace reconcile keeps polling.
+            Workspace.DiskIsWatched = Watcher.Start(path);
             Status = $"Loaded {Path.GetFileName(path)} ({Solution.Projects.Count} projects)";
         }
         catch (Exception ex) { Status = ex.Message; }
+    }
+
+    /// <summary>Rebuilds the tree and the project list from disk. Shared by the initial open and the
+    /// structural-change refresh, so the two can't drift. The startup project is re-resolved by path rather
+    /// than re-defaulted: an external tool adding a file must not silently move the user's F5 target.</summary>
+    private async Task LoadTreeAsync(string path)
+    {
+        var previousStartup = StartupProject?.Path;
+        var projectNodes = await Solution.LoadAsync(path);
+        Tree.Clear();
+        foreach (var n in projectNodes) Tree.Add(n);
+        Projects.Clear();
+        foreach (var e in Solution.Projects) Projects.Add(e);
+        NuGetVm.SetProjects(Solution.Projects);
+        StartupProject = Projects.FirstOrDefault(p =>
+                             string.Equals(p.Path, previousStartup, StringComparison.OrdinalIgnoreCase))
+                         ?? PickDefaultStartup(Solution.Projects);
     }
 
     private static ProjectEntry? PickDefaultStartup(IReadOnlyList<ProjectEntry> projects)
@@ -194,16 +215,85 @@ public partial class MainWindowViewModel : ViewModelBase
         await Workspace.ReconcileWithDiskAsync(ct);
     }
 
-    /// <summary>Focus-time refresh (wired to the window's <c>Activated</c> event): reflects any external edits
-    /// back into the view so it's never frozen on stale text. Reloads every open editor tab whose file drifted
-    /// on disk, and — only if the workspace was already loaded — reconciles the semantic snapshot too (focus
-    /// must never trigger the cold MSBuild load; that stays lazy, on first query). Errors report to the status
-    /// bar rather than throwing out of the <c>async void</c> event handler.</summary>
+    // ── Disk-change routing ───────────────────────────────────────────────────────────────────────────
+    //
+    // One signal, two INDEPENDENT dirty tracks: the workspace's pending-set (drained by the next semantic
+    // query) and each tab's IsStale flag (consumed when the tab is next shown). They are separate because a
+    // single shared set would let the first consumer to drain it erase the other's mark.
+    //
+    // Only the visible surfaces react now — the active tab and, on a structural change, the tree. The
+    // snapshot stays lazy: reconciling it on every watcher tick would pay the expensive part for edits no
+    // query ever asks about.
+
+    /// <summary>Handles one debounced burst from <see cref="Watcher"/>. Arrives on a threadpool thread: the
+    /// workspace's dirty-track pushes are thread-safe and happen here, and everything touching tabs or the
+    /// tree hops to the UI thread.</summary>
+    private void OnDiskChanged(DiskChangeSignal signal)
+    {
+        if (signal.Overflow || signal.Structural) Workspace.RequestFullRescan();
+        else Workspace.MarkPathsChanged(signal.Paths);
+
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try { await ApplyDiskChangeToViewAsync(signal); }
+            catch (Exception ex) { Status = ex.Message; }
+        });
+    }
+
+    private async Task ApplyDiskChangeToViewAsync(DiskChangeSignal signal)
+    {
+        // An overflow means the OS dropped events, so no path list can be trusted: every tab is suspect.
+        // Marking them stale is cheap — each one costs a stat when it's next shown, not a read.
+        var changed = signal.Paths.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var tab in Tabs.OfType<EditorTabViewModel>())
+            if (tab.FilePath is not null && (signal.Overflow || changed.Contains(Path.GetFullPath(tab.FilePath))))
+                tab.IsStale = true;
+
+        // Structural changes are the one thing the tree can't learn any other way — a new file simply never
+        // appears until something rebuilds the nodes. Overflow may have hidden a structural change, so it
+        // refreshes too.
+        if ((signal.Structural || signal.Overflow) && Solution.SolutionPath is not null)
+            await LoadTreeAsync(Solution.SolutionPath);
+
+        // The live push: the file the user is looking at updates the instant it changes, with no focus
+        // change. That is the read-alongside-an-agent payoff. Background tabs stay lazy.
+        if (ActiveTab is EditorTabViewModel active && active.IsStale) await active.RevalidateFromDiskAsync();
+    }
+
+    /// <summary>The lazy half: a background tab is re-read only when it's shown, and only if flagged. The
+    /// stamp gate inside means an unchanged file costs a stat, so activating a tab is never a disk read for
+    /// nothing.</summary>
+    partial void OnActiveTabChanged(TabViewModelBase? value)
+    {
+        if (value is not EditorTabViewModel { IsStale: true } tab) return;
+        _ = RevalidateActivatedTabAsync(tab);
+    }
+
+    // Fire-and-forget from a property setter, so it must swallow into the status bar: an exception escaping
+    // here would be an unobserved task, not something a caller could catch.
+    private async Task RevalidateActivatedTabAsync(EditorTabViewModel tab)
+    {
+        try { await tab.RevalidateFromDiskAsync(); }
+        catch (Exception ex) { Status = ex.Message; }
+    }
+
+    /// <summary>Focus-time safety-net (wired to the window's <c>Activated</c> event). The watcher handles the
+    /// steady state now, so this exists for what it might have missed while we were unfocused —
+    /// <c>FileSystemWatcher</c> is best-effort and a dropped event has no other backstop.
+    ///
+    /// <para>Both tracks are re-armed to distrust the feed rather than to re-read: every tab is marked stale
+    /// (one stat each, paid lazily on activation) and the snapshot is told to rescan (a manifest walk plus one
+    /// stat per document — the "bounded stat-walk" that replaces the old O(bytes-in-the-solution) focus). With
+    /// nothing changed since we left, that is zero reads. The active tab and the snapshot (only if already
+    /// loaded — focus must never trigger the cold MSBuild load) are brought current now. Errors report to the
+    /// status bar rather than throwing out of the <c>async void</c> event handler.</para></summary>
     public async Task RefreshFromDiskAsync()
     {
         try
         {
-            await ReloadDriftedTabsAsync();
+            foreach (var tab in Tabs.OfType<EditorTabViewModel>()) tab.IsStale = true;
+            Workspace.RequestFullRescan();
+            if (ActiveTab is EditorTabViewModel active) await active.RevalidateFromDiskAsync();
             if (Workspace.IsLoaded) await Workspace.ReconcileWithDiskAsync();
         }
         catch (Exception ex) { Status = ex.Message; }
@@ -222,19 +312,18 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { Status = ex.Message; }
     }
 
-    /// <summary>Re-reads every open editor tab from disk and reflects any change back into the view. Content is
-    /// compared inside <see cref="EditorTabViewModel.ReloadFromDisk"/> (on the UI thread, where the document is
-    /// safe to read), so an unchanged file is a no-op — no flicker, no caret reset. Covers non-Roslyn tabs
-    /// (a <c>.md</c>, a <c>.json</c>) that the snapshot reconcile doesn't. A file that vanished or can't be read
-    /// is left as-is until the next refresh.</summary>
+    /// <summary>Brings every open editor tab up to date with disk, eagerly. Reserved for the moments that
+    /// deliberately bypass laziness: an explicit "Reload solution", and the refresh a rename does after its own
+    /// writes. The steady state goes through the stale flag instead.
+    ///
+    /// <para>Each tab stamp-gates its own read and content-compares before touching the buffer, so an unchanged
+    /// file is a stat and a no-op — no flicker, no caret reset. Covers non-Roslyn tabs (a <c>.md</c>, a
+    /// <c>.json</c>) that the snapshot reconcile doesn't. A file that vanished or can't be read is left as-is
+    /// until the next refresh.</para></summary>
     private async Task ReloadDriftedTabsAsync()
     {
         foreach (var tab in Tabs.OfType<EditorTabViewModel>().ToList())
-        {
-            if (tab.FilePath is null || !File.Exists(tab.FilePath)) continue;
-            try { tab.ReloadFromDisk(await File.ReadAllTextAsync(tab.FilePath)); }
-            catch { /* transient IO or a file mid-write; try again on the next focus */ }
-        }
+            await tab.RevalidateFromDiskAsync();
     }
 
     /// <summary>Navigates to the definition of the symbol at <paramref name="caretOffset"/>, reporting the
@@ -313,14 +402,23 @@ public partial class MainWindowViewModel : ViewModelBase
                 return;
         }
 
+        // This is the app's one first-party multi-file write, and it refreshes the view itself below. Mute the
+        // watcher over exactly the paths it touches, or the resulting burst would queue a redundant reconcile
+        // racing that refresh. The mute expires (it is not consumed), so a later external edit to these same
+        // files is still caught.
+        Watcher.MuteWrites(SelfWrittenPaths(outcome));
+
         try { RenameService.ApplyToDisk(outcome); }
         catch (Exception ex) { Status = $"Rename failed writing to disk: {ex.Message}"; return; }
 
-        // Reflect the writes back into the view. Ticket 1's focus reconcile refreshes the snapshot and open
-        // tabs on content drift, but it does NOT touch the solution tree, and a moved file's tab is keyed to a
-        // path that no longer exists — so a file move needs an explicit tree-node replace + tab re-home here.
+        // Reflect the writes back into the view. The focus reconcile refreshes the snapshot and open tabs on
+        // content drift, but it does NOT touch the solution tree, and a moved file's tab is keyed to a path
+        // that no longer exists — so a file move needs an explicit tree-node replace + tab re-home here.
         if (outcome.Move is { } move) await ApplyFileMoveToViewAsync(move.OldPath, move.NewPath);
-        await Workspace.ReconcileWithDiskAsync(); // structural (a move) rebuilds; content-only overlays
+        // Muting the watcher means nothing marked these paths changed, so this reconcile has to ask for the
+        // full pass itself — otherwise it would drain an empty pending-set and skip the rename entirely.
+        Workspace.RequestFullRescan(); // structural (a move) rebuilds; content-only overlays
+        await Workspace.ReconcileWithDiskAsync();
         await ReloadDriftedTabsAsync();
 
         var count = outcome.ChangedFiles.Count;
@@ -328,6 +426,16 @@ public partial class MainWindowViewModel : ViewModelBase
         Status = outcome.Move is { } m
             ? $"Renamed to {newName} across {count} {files}; {Path.GetFileName(m.OldPath)} → {Path.GetFileName(m.NewPath)}"
             : $"Renamed to {newName} across {count} {files}";
+    }
+
+    // Every path the rename apply is about to touch: each rewritten file, plus both ends of the move (the
+    // File.Move raises events on the source and the destination).
+    private static IEnumerable<string> SelfWrittenPaths(RenameOutcome outcome)
+    {
+        foreach (var file in outcome.ChangedFiles) yield return file.Path;
+        if (outcome.Move is not { } move) yield break;
+        yield return move.OldPath;
+        yield return move.NewPath;
     }
 
     /// <summary>Propagates a file rename into the view after the disk move: replaces the moved file's tree node

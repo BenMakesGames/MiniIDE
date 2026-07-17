@@ -52,14 +52,36 @@ public partial class MainWindow : Window
             if (Vm is not null) Vm.RequestOpen += Reveal;
         };
         KeyDown += OnGlobalKeyDown;
-        // Reconcile against disk whenever the window regains focus: external tools (the agent, CLI git) own
-        // the writes under the read-only law, so re-entering MiniIde is exactly when the view might be stale.
+        // The safety-net refresh whenever the window regains focus: the OS change feed (SolutionWatcher) drives
+        // the steady state, but it is best-effort, and re-entering MiniIde is exactly when a dropped event
+        // would show. External tools (the agent, CLI git) own the writes under the read-only law.
         Activated += OnWindowActivated;
+        // The watcher holds an OS handle and a debounce timer; a closing window wants neither, and a signal
+        // arriving mid-teardown would post to a dispatcher that is going away.
+        Closed += (_, _) => (DataContext as MainWindowViewModel)?.Watcher.Dispose();
         // The panel starts expanded, so the toggle's band starts at the full strip height (see TabStripHeight).
         BottomPanelToggleBand.Height = TabStripHeight;
         SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
         SolutionTree.AddHandler(PointerPressedEvent, OnTreePointerPressed, RoutingStrategies.Tunnel);
         BottomTabs.AddHandler(PointerPressedEvent, OnBottomTabsPointerPressed, RoutingStrategies.Tunnel);
+        BottomTabs.SelectionChanged += OnBottomTabsSelectionChanged;
+    }
+
+    /// <summary>Scopes the Disk panel's counter pull to the Disk tab being selected — a 1 s repaint for a panel
+    /// nobody is looking at is pure background cost. Its signal log is unaffected: that is event-driven and
+    /// stays live, so tabbing back after a burst still shows what happened.
+    ///
+    /// <para>Distinct from <see cref="OnBottomTabsPointerPressed"/>, which is a tunnel handler for
+    /// expand-on-click and is not a selection hook. The source guard is load-bearing: SelectionChanged bubbles,
+    /// so the Find results list and the three NuGet lists all raise it through this TabControl, and without the
+    /// guard picking a NuGet package would stop the Disk panel's timer.</para></summary>
+    private void OnBottomTabsSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, BottomTabs)) return;
+        if (DataContext is not MainWindowViewModel vm) return;
+
+        if (ReferenceEquals(BottomTabs.SelectedItem, DiskTab)) vm.DiskInsight.StartPolling();
+        else vm.DiskInsight.StopPolling();
     }
 
     // Activated can fire before the DataContext is wired at startup; guard rather than assume Vm is set.

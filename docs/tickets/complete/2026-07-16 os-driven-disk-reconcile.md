@@ -117,3 +117,117 @@ Extend the existing MSBuild-fixture harness (`WorkspaceServiceTests` shape — r
 - [ ] Rename a symbol (safe-rename) touching several files → the view updates once via the rename's own refresh, with no visible double-reconcile from the watcher; then externally edit one of the renamed files → it's still picked up (mute was scoped/lifted).
 - [ ] Global search (Ctrl+Shift+F) with a regex still returns line/column-accurate, pruned results — unchanged.
 - [ ] Sanity: with the watcher disabled/never-started (temporarily), focus + F12 still reconcile correctly via the fallback poll.
+
+## Learnings
+
+### Verification status
+`dotnet build` (0 errors, 0 new warnings) and `dotnet test MiniIde.slnx` (36 passing, up from a 25 baseline —
+5 new `WorkspaceServiceTests` + 6 new `SolutionWatcherTests`) both ran here. The app was launched against `MiniIde.slnx` and survived a create/change/delete burst under the root
+without dying — enough to prove the watcher's startup wiring and the structural→tree-reload path don't throw.
+**The GUI observations were not verified**: live push into the active tab, lazy revalidation on tab activation,
+no-flicker on an unchanged tab, and the rename's no-double-reconcile all need eyes on the window. Those Test
+Plan items are still open.
+
+### Architectural decisions
+- **Open Decision 1 (where the watcher lives) — dedicated service** (`Services/SolutionWatcher.cs`), per the
+  default. It keeps the OS handle + threadpool timer out of `WorkspaceService`, and it made the service unit-
+  testable against a real temp dir (`SolutionWatcherTests`), which would have been awkward folded in.
+- **Open Decision 2 (debounce window) — 200 ms**, trailing-edge (each event pushes the deadline out, so a
+  burst is one signal carrying many paths). `Coalesces_ABurstIntoOneSignal` pins it.
+- **Open Decision 3 (self-write mute) — a path-set with an expiry**, taking the precision of the path-set and
+  the simplicity of the window. **Expiry, not consumption, is the release**: one `File.WriteAllText` can raise
+  several `Changed` events, so a consume-once mute leaks the second one through. The 3 s window must outlast
+  OS delivery lag + debounce, and being bounded is what keeps a *later* external edit catchable.
+- **Open Decision 4 (stale flag home) — a `bool` on `EditorTabViewModel`**, per the default, plus the tab's
+  own `_synced` stamp and a `RevalidateFromDiskAsync` that owns stat→read→reload as one unit. Putting the gate
+  *inside* the method the VM calls means no caller can forget it — the pit of success beat a VM-side stamp map.
+- **Open Decision 5 (visible-tab liveness) — live push**, per the default.
+- **`DiskIsWatched`, not an implicit assumption.** `SolutionWatcher.Start` returns whether the watch is live;
+  the reconcile full-rescans whenever it's false. Without this the pending-set drain would find an empty set
+  forever if the watcher never started, and the view would freeze — the acceptance criterion that turned into
+  `Reconcile_WhenUnwatched_StillFullRescansEveryTime`.
+- **Focus re-arms both tracks rather than re-reading either.** `RefreshFromDiskAsync` marks every tab stale and
+  calls `RequestFullRescan()`. That is the ticket's "bounded stat-walk": distrust the best-effort feed at the
+  cheap moment, and let the stamp gate turn "check everything" into zero reads when nothing changed.
+
+### Problems encountered / gotchas
+- **The stamp invariant is subtler than "stat before read".** Two halves are load-bearing: write a stamp *only*
+  alongside the read that produced the snapshot's text, *and* sample it *before* that read. Then every stamp
+  describes a disk state at or before the snapshot's content, so a write racing the read leaves a stale stamp
+  and gets re-read. Stamps then cost redundant reads, never missed changes. The corollary bit: the obvious
+  "capture stamps at `LoadSolutionAsync`" is **wrong** — stamping after `OpenSolutionAsync` would record a
+  racing write's own stamp and silently swallow it. So nothing is stamped at load; the first full rescan reads
+  each document once and stamps it. Cheap (it follows an MSBuild load) and correct by construction.
+- **Draining the dirty set before taking `_lock` is a bug.** It looks right ("changes that land mid-run belong
+  to the next reconcile"), but it lets a concurrent caller find an empty set, return early, and query against a
+  snapshot the in-flight reconcile hasn't finished updating. Drained under the lock, a second caller blocks and
+  then drains. A drain that throws hands the work back via `RequestFullRescan()` — a drained-and-lost path
+  would leave the snapshot stale forever.
+- **Muting the watcher breaks the rename's own follow-up refresh.** `RenameSymbolAsync` called
+  `ReconcileWithDiskAsync()` and relied on the fingerprint to notice its own move. Once the watcher is muted
+  over those paths, nothing marks them pending, so the drain finds an empty set and skips the rename entirely.
+  It now calls `RequestFullRescan()` first. General rule: mute and pending-set are coupled — anything that
+  mutes must mark its own work.
+- **`FileSystemWatcher` has no subtree exclusion.** `Filters` only adds name patterns; `IdeDirectories`
+  pruning is a manual walk of the relative path's segments. Without it a build writing `obj/` is a reconcile
+  storm.
+- **A test that creates the file it means to edit doesn't test what it says.** The first cut of
+  `Reports_AnEditedProjectFile_AsStructural` wrote a `Lib.csproj` that didn't exist, so it passed on the
+  `Created`-is-structural rule and never exercised the `.csproj`-content rule at all. The fixture now
+  pre-creates it so the write is a genuine `Changed`.
+- **Proving a *negative* (no read happened) needed no test seam.** `Swapped` is byte-for-byte the same length
+  as `Original` with two lines exchanged; write it, restore the mtime, and the stamp is identical. If
+  go-to-definition still answers with the pre-swap line, the file provably was not read. The test doubles as
+  executable documentation of the accepted limitation.
+- **`Timer.Change` after `Dispose` throws.** An in-flight watcher event landing after `Stop` would take the
+  process down from a threadpool callback; `Schedule` swallows `ObjectDisposedException`.
+
+### Workarounds / limitations
+- **A structural change collapses the solution tree.** The tree refresh is the blessed "existing tree reload"
+  fallback (`LoadTreeAsync` → `Tree.Clear()` + rebuild), and `TreeNode.IsExpanded` **is not bound to anything**
+  — the `TreeView` owns expansion in its containers, so a rebuild resets it and there is no model state to
+  preserve. This was tolerable when only an explicit "Reload solution" rebuilt the tree; now that any external
+  add/delete/rename does, it will be visible while working alongside an agent. **Follow-up candidate**: either
+  bind `IsExpanded` two-way via a `TreeViewItem` style and restore it across a rebuild, or do a targeted node
+  insert/remove (the rename ticket's `TryReplaceFileNode` is the precedent). Deliberately not rolled in — the
+  ticket out-of-scoped tree work and blessed the fallback.
+- **`LoadTreeAsync` re-resolves the startup project by path** rather than re-defaulting, so an external file
+  add doesn't silently move the user's F5 target. That was not in the ticket; it is the minimum needed to make
+  an *automatic* tree reload non-destructive, since `OpenSolutionAsync`'s `PickDefaultStartup` assumed a
+  user-initiated open.
+- **Watcher resume after `Error` is the OS's behavior, not ours.** The handler signals overflow and leaves the
+  watcher alone: a buffer overrun keeps raising events afterward, so it resumes. A watch killed outright (root
+  directory deleted) would not, and `DiskIsWatched` would stay optimistically true — but the focus safety-net
+  still full-rescans, so the view stays correct, and a deleted solution root is a bigger problem anyway. No
+  recreate-on-error loop was added.
+- **Only the solution root is watched**, per the ticket. A project outside it is caught by the fallback
+  reconcile at the next pre-op, not by the feed.
+
+### Related areas affected
+- `MainWindow.axaml.cs` gained a `Closed` handler to dispose the watcher. Note **nothing in the app disposes
+  `WorkspaceService`** — process exit does. The watcher gets an explicit teardown because it holds an OS handle
+  and a timer that could post into a dispatcher that's going away.
+- `RefreshFromDiskAsync` no longer eagerly reloads every tab; `ReloadDriftedTabsAsync` survives only for the
+  two paths that deliberately bypass laziness ("Reload solution" and the rename's post-apply refresh).
+- The pre-existing structural-reload-vs-`GetDiagnosticsAsync` race (read-only ticket's Learnings) is now
+  marginally more reachable — the watcher can trigger a structural reload without a focus change. Debounce
+  covers the common burst; no gratuitous extra reloads were added. Still its own follow-up.
+
+### Rejected alternatives
+- **A single shared dirty set** — rejected per Constraints, and worth restating concretely: the snapshot's
+  drain (which happens on any F12) would erase the "this unopened tab is stale" mark, and the tab would show
+  stale text forever. Two tracks, one signal.
+- **Reconciling the snapshot eagerly on every watcher tick** — rejected: it pays the expensive part
+  (`WithDocumentText` busts the cached compilation) for edits no query ever asks about. The snapshot stays
+  lazy and query-driven; only the *visible* surfaces react to the event.
+- **A `MarkStructural()` method on `WorkspaceService`** — rejected as redundant. A structural change is just
+  `RequestFullRescan()`, whose full pass fingerprints and rebuilds; "structural" only means something extra to
+  the *view* (the tree), which is the VM's business and reads it off the signal.
+- **A test-only read-counter seam on the reconcile** — rejected; the same-length/restored-mtime trick observes
+  the absence of a read through the public API (see above).
+- **Blanket-muting all first-party writes** — rejected per Constraints. NuGet's `.csproj` write is structural
+  and nothing else would tell the workspace to rebuild; only writes that refresh the view themselves (the
+  rename apply) belong in the mute.
+- **Routing global search through the Windows Search Index** — out of scope and restated here so it isn't
+  "optimized" later: it can't return line/column and can't do regex/substring. `SearchService`/`FileGrepper`
+  are untouched.

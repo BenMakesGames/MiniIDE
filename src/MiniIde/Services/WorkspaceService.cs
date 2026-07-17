@@ -34,9 +34,84 @@ public class WorkspaceService : IDisposable
     private readonly SemaphoreSlim _lock = new(1, 1);
     public event Action<string>? Progress;
 
+    // The stamp of each document's content as it currently sits in _solution. A file whose stamp still
+    // matches cannot have been read into a different snapshot, so the reconcile skips it without reading.
+    // Only ever touched under _lock (load / reconcile).
+    private readonly Dictionary<string, FileStamp> _stamps = new(StringComparer.OrdinalIgnoreCase);
+
+    // The dirty track the disk watcher pushes into: paths known-changed since the last reconcile, plus the
+    // "rescan everything" flag. Guarded by its own plain lock, not _lock — the watcher signals from a
+    // threadpool thread and must never block behind a running reconcile.
+    private readonly object _dirtyGate = new();
+    private readonly HashSet<string> _pending = new(StringComparer.OrdinalIgnoreCase);
+    private bool _needsFullRescan = true;
+
+    // Read-only observation counters. They get their own plain gate rather than riding _lock: an observer on
+    // the UI thread must be able to read them without blocking behind a running reconcile, and _lock is an
+    // async semaphore no synchronous reader can politely take. Incremented in funnel order, so Read <= Statted
+    // and Forked <= Read hold for any snapshot taken between two increments.
+    private readonly object _countersGate = new();
+    private long _docsStatted, _docsRead, _docsForked, _drains, _fullRescans, _structuralReloads;
+
+    private void Count(ref long counter)
+    {
+        lock (_countersGate) counter++;
+    }
+
+    /// <summary>A single consistent read of the reconcile's since-start counters, for observation only. Costs
+    /// no I/O and cannot block on a reconcile. Cumulative since app start; a reader wanting one burst subtracts
+    /// its own baseline.</summary>
+    public ReconcileStats Stats()
+    {
+        lock (_countersGate)
+            return new ReconcileStats(_docsStatted, _docsRead, _docsForked, _drains, _fullRescans, _structuralReloads);
+    }
+
+    /// <summary>What the reconcile currently owes: the undrained pending paths and the full-rescan flag. The
+    /// path list is a copy — handing out the live set would let an observer mutate a dirty track.</summary>
+    public DiskDirtyState Dirty()
+    {
+        lock (_dirtyGate) return new DiskDirtyState(_pending.ToArray(), _needsFullRescan);
+    }
+
+    /// <summary>Whether an OS file-change feed is driving <see cref="MarkPathsChanged"/> — set by the owner
+    /// when a <see cref="SolutionWatcher"/> is actually running. While false the reconcile can trust no
+    /// pending-set, so it full-rescans every time: exactly the pre-watcher behavior (plus the stamp gate).
+    /// This is what keeps the view correct if the watcher never started.</summary>
+    public bool DiskIsWatched { get; set; }
+
     /// <summary>Whether the (expensive) MSBuild snapshot has been built yet. Lets focus-time reconciliation
     /// stay a no-op until the first semantic query has paid the cold-start — focus must never trigger it.</summary>
     public bool IsLoaded => _solution is not null;
+
+    /// <summary>Records that <paramref name="paths"/> changed on disk, so the next reconcile overlays them.
+    /// Cheap and non-blocking — the watcher calls it from a threadpool thread. Paths that aren't solution
+    /// documents are harmless (the drain ignores them).</summary>
+    public void MarkPathsChanged(IEnumerable<string> paths)
+    {
+        lock (_dirtyGate)
+            foreach (var p in paths) _pending.Add(Path.GetFullPath(p));
+    }
+
+    /// <summary>Forces the next reconcile to rescan the whole solution rather than drain the pending-set.
+    /// The recovery path for anything the pending-set can't express: a structural change (a document added or
+    /// removed — <c>WithDocumentText</c> can do neither), a watcher buffer overflow, or a cold start.</summary>
+    public void RequestFullRescan()
+    {
+        lock (_dirtyGate) _needsFullRescan = true;
+    }
+
+    private (bool Full, string[] Paths) DrainDirty()
+    {
+        lock (_dirtyGate)
+        {
+            var full = _needsFullRescan || !DiskIsWatched;
+            var paths = full ? Array.Empty<string>() : _pending.ToArray();
+            _pending.Clear();
+            _needsFullRescan = false;
+            return (full, paths);
+        }
+    }
 
     public async Task EnsureLoadedAsync(string solutionPath, CancellationToken ct = default)
     {
@@ -68,31 +143,56 @@ public class WorkspaceService : IDisposable
     }
 
     /// <summary>Brings the snapshot up to date with the authoritative disk. Every semantic query funnels
-    /// through here (before F12 / Shift+F12 / Problems) and the window fires it on focus, so the view is
-    /// never frozen on stale text.
+    /// through here (before F12 / Shift+F12 / Problems), so the view is never frozen on stale text.
+    ///
+    /// <para><b>Two modes.</b> Normally this drains the pending-set the disk watcher pushed into
+    /// (<see cref="MarkPathsChanged"/>) and overlays only those documents — O(changed), not O(solution). When
+    /// <see cref="RequestFullRescan"/> was called (cold start, a structural change, a watcher overflow) or no
+    /// watcher is running at all, it falls back to the whole-solution pass: the manifest fingerprint decides
+    /// structural drift, everything else goes through the (stamp-gated) overlay. The watcher makes that pass
+    /// rare; because <c>FileSystemWatcher</c> is best-effort, it can never replace it.</para>
     ///
     /// <para><b>Structural drift</b> — a source file or project added/removed, or a project file edited —
     /// forces a real reload (<see cref="LoadSolutionAsync"/>), because <c>WithDocumentText</c> can neither add
     /// nor remove documents. <b>Text drift</b> — the same file set with changed contents — is folded in with a
-    /// cheap in-memory <c>WithDocumentText</c> overlay (<see cref="OverlayDiskTextAsync"/>).</para>
+    /// cheap in-memory <c>WithDocumentText</c> overlay (<see cref="OverlayDocumentAsync"/>).</para>
     ///
     /// <para>No-op until <see cref="EnsureLoadedAsync"/> has run (focus must not trigger the cold start).
     /// Never writes disk — reconciliation is strictly disk → view.</para></summary>
     public async Task ReconcileWithDiskAsync(CancellationToken ct = default)
     {
         if (_solution is null || _solutionPath is null) return;
+
         await _lock.WaitAsync(ct);
         try
         {
             if (_solution is null || _solutionPath is null) return;
+
+            // Drained under the lock, never before it: a concurrent caller must block here and then drain,
+            // rather than find an empty set and return early against a snapshot this reconcile hasn't
+            // finished updating. On failure the work is handed back as a full rescan rather than silently
+            // dropped — a drained-and-lost path would leave the snapshot stale forever.
+            var (full, paths) = DrainDirty();
+            if (!full)
+            {
+                Count(ref _drains);
+                foreach (var path in paths) await OverlayPathAsync(path, ct);
+                return;
+            }
+
+            Count(ref _fullRescans);
             var current = await ComputeManifestFingerprintAsync(_solutionPath, ct);
             if (!string.Equals(current, _manifestFingerprint, StringComparison.Ordinal))
             {
+                // Its own counter, not an inference: this is an MSBuildWorkspace teardown + rebuild, by far
+                // the most expensive thing the reconcile can do.
+                Count(ref _structuralReloads);
                 await LoadSolutionAsync(ct); // fresh snapshot already reflects disk; nothing left to overlay
                 return;
             }
             await OverlayDiskTextAsync(ct);
         }
+        catch { RequestFullRescan(); throw; }
         finally { _lock.Release(); }
     }
 
@@ -111,31 +211,64 @@ public class WorkspaceService : IDisposable
         finally { _lock.Release(); }
     }
 
-    /// <summary>The disk-reflection overlay: for every document whose on-disk text has drifted from the
-    /// snapshot, forks <see cref="_solution"/> via <c>WithDocumentText</c> so the next query resolves against
-    /// current disk. Without it, once an external edit shifts offsets, go-to-definition silently lands on the
-    /// wrong symbol.
+    /// <summary>The whole-solution half of the disk-reflection overlay: offers every document to
+    /// <see cref="OverlayDocumentAsync"/>. This is the fallback pass — cold start, watcher overflow, or no
+    /// watcher at all — so it is O(documents) in <c>stat</c>s but only O(changed) in reads. Assumes the lock
+    /// is held.</summary>
+    private async Task OverlayDiskTextAsync(CancellationToken ct)
+    {
+        // Iterating the snapshot captured here while OverlayDocumentAsync re-forks _solution is deliberate:
+        // a DocumentId survives the fork, so the ids collected from this pass stay addressable.
+        foreach (var project in _solution!.Projects)
+            foreach (var doc in project.Documents)
+                await OverlayDocumentAsync(doc, ct);
+    }
+
+    // The pending-set half: one path the watcher reported changed. A path with no Roslyn document (a .md, a
+    // file outside the solution) is simply not ours to overlay.
+    private async Task OverlayPathAsync(string path, CancellationToken ct)
+    {
+        var doc = FindDocument(path);
+        if (doc is not null) await OverlayDocumentAsync(doc, ct);
+    }
+
+    /// <summary>Reflects one document's on-disk text into the snapshot, forking <see cref="_solution"/> via
+    /// <c>WithDocumentText</c> so the next query resolves against current disk. Without it, once an external
+    /// edit shifts offsets, go-to-definition silently lands on the wrong symbol.
     ///
-    /// <para>Drift is decided by <b>content</b> (<c>ContentEquals</c>), never mtime: an operation-write that
-    /// leaves a file's content unchanged (e.g. a NuGet restore touching a project's source) forks nothing, and
-    /// a same-length overwrite that a file's size could hide still forks. Skipping unchanged files matters —
-    /// re-applying identical text still invalidates the cached compilation, turning a warm query cold.</para>
+    /// <para>Two gates, in order. The <see cref="FileStamp"/> decides whether to <b>read</b>: an untouched
+    /// file costs a <c>stat</c>. <b>Content</b> (<c>ContentEquals</c>) decides whether to <b>fork</b>: an
+    /// operation-write that leaves content unchanged (e.g. a NuGet restore touching a project's source) forks
+    /// nothing even though its stamp moved. Skipping unchanged files matters — re-applying identical text
+    /// still invalidates the cached compilation, turning a warm query cold.</para>
+    ///
+    /// <para>The stamp is recorded <em>only</em> alongside the read that produced the snapshot's content, and
+    /// is sampled <em>before</em> that read. Both halves are load-bearing: they make every stamp describe a
+    /// disk state at or before the content in <see cref="_solution"/>, so a write racing the read leaves a
+    /// stale stamp and gets re-read next time. A stamp can therefore cost a redundant read, never a missed
+    /// change.</para>
     ///
     /// <para>Forks the immutable snapshot in memory and <b>never</b> calls <c>MSBuildWorkspace.TryApplyChanges</c>
     /// (which would persist the text to disk). Under the read-only law there is no edit to push back, so any
     /// disk write here would be a bug. Assumes the lock is held.</para></summary>
-    private async Task OverlayDiskTextAsync(CancellationToken ct)
+    private async Task OverlayDocumentAsync(Document doc, CancellationToken ct)
     {
-        foreach (var project in _solution!.Projects)
-            foreach (var doc in project.Documents)
-            {
-                ct.ThrowIfCancellationRequested();
-                if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
-                var updated = SourceText.From(await File.ReadAllTextAsync(doc.FilePath, ct));
-                var current = await doc.GetTextAsync(ct);
-                if (current.ContentEquals(updated)) continue;
-                _solution = _solution.WithDocumentText(doc.Id, updated);
-            }
+        ct.ThrowIfCancellationRequested();
+        if (doc.FilePath is null) return;
+
+        Count(ref _docsStatted);
+        var stamp = FileStamp.For(doc.FilePath);
+        if (stamp is null) return; // gone or unreadable: keep the last-known text rather than blanking it
+        if (_stamps.TryGetValue(doc.FilePath, out var synced) && synced == stamp.Value) return;
+
+        Count(ref _docsRead);
+        var updated = SourceText.From(await File.ReadAllTextAsync(doc.FilePath, ct));
+        _stamps[doc.FilePath] = stamp.Value;
+
+        var current = await doc.GetTextAsync(ct);
+        if (current.ContentEquals(updated)) return;
+        Count(ref _docsForked);
+        _solution = _solution!.WithDocumentText(doc.Id, updated);
     }
 
     // The cheap metadata-only .slnx/.sln parse (no MSBuild eval — see docs/roslyn.md) plus a directory walk:

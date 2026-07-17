@@ -1,0 +1,43 @@
+name: CI
+
+# Build and run the test suite. Windows-hosted on purpose: MiniIde is a WinExe pinned to win-x64, and the
+# WorkspaceService / RenameService tests drive a real MSBuildWorkspace (MSBuildLocator.RegisterDefaults needs a
+# genuine SDK on the machine), so a native Windows + .NET 10 SDK runner is the least-surprising place to run them.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# One in-flight run per ref; a newer push cancels the older run instead of queueing behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          # net10.0 target + native .slnx support both need a 10.x SDK.
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore MiniIde.slnx
+
+      - name: Build
+        # Release, and no -warnaserror: the three pre-existing warnings (CS0618 Workspace.WorkspaceFailed,
+        # IL3000 in SyntaxHighlightService, AVLN5001 TextBox.Watermark) are known and must not fail the build.
+        run: dotnet build MiniIde.slnx --configuration Release --no-restore
+
+      - name: Test
+        # --no-restore (not --no-build): the WinExe pins win-x64 while the test project is RID-agnostic, and
+        # --no-build across that split is a known source of "assets file" mismatches — let test build incrementally.
+        run: dotnet test MiniIde.slnx --configuration Release --no-restore --verbosity normal

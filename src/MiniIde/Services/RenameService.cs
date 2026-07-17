@@ -64,18 +64,34 @@ public static class RenameService
                 ct.ThrowIfCancellationRequested();
                 var oldDoc = solution.GetDocument(docId);
                 var newDoc = updated.GetDocument(docId);
-                if (oldDoc?.FilePath is null || newDoc?.FilePath is null) continue;
-
-                // RenameFile keeps the same DocumentId but swaps the file path; that is how a type-matched file
-                // rename (Foo.cs → Bar.cs) shows up. The renamed document's new text belongs at the NEW path.
-                if (!string.Equals(oldDoc.FilePath, newDoc.FilePath, StringComparison.Ordinal))
-                    move = new RenameFileMove(oldDoc.FilePath, newDoc.FilePath);
+                if (oldDoc?.FilePath is null || newDoc is null) continue;
 
                 var text = await newDoc.GetTextAsync(ct);
-                changed.Add(new RenamedFile(newDoc.FilePath, text.ToString()));
+                var newPath = ResolveNewPath(oldDoc, newDoc);
+
+                // RenameFile (Foo.cs → Bar.cs on a type-matched file) keeps the same DocumentId; a differing
+                // path is the move, and the renamed document's new text belongs at the NEW path.
+                if (!string.Equals(oldDoc.FilePath, newPath, StringComparison.Ordinal))
+                    move = new RenameFileMove(oldDoc.FilePath, newPath);
+
+                changed.Add(new RenamedFile(newPath, text.ToString()));
             }
 
         return RenameOutcome.Renamed(changed, move);
+    }
+
+    // Where a changed document's text should land. RenameFile updates the document's *Name* (to <NewType>.cs)
+    // but not its FilePath, so a file rename is detected by the name change and the destination is the old
+    // directory + new name. A FilePath that Roslyn *did* update is honored first, in case that ever changes.
+    private static string ResolveNewPath(Document oldDoc, Document newDoc)
+    {
+        var oldPath = oldDoc.FilePath!;
+        if (newDoc.FilePath is { } fp && !string.Equals(fp, oldPath, StringComparison.Ordinal))
+            return fp;
+        if (!string.Equals(oldDoc.Name, newDoc.Name, StringComparison.Ordinal)
+            && Path.GetDirectoryName(oldPath) is { } dir)
+            return Path.Combine(dir, newDoc.Name);
+        return oldPath;
     }
 
     /// <summary>Writes a successful <see cref="RenameOutcome"/> to disk: the file move first (so no content

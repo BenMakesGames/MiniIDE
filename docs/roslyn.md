@@ -80,9 +80,11 @@ present via `Microsoft.CodeAnalysis.CSharp.Workspaces`. Forks the immutable snap
   `false`.
 - **Gate on in-source first**: `SymbolFinder.FindSourceDefinitionAsync(symbol, solution, ct)` — null (or no
   in-source location) means a framework/NuGet symbol; refuse (no metadata-as-source rewrite).
-- **`RenameFile: true` keeps the same `DocumentId`** and changes its `FilePath`. Diff via
-  `updated.GetChanges(old).GetProjectChanges().GetChangedDocumentIds()`; a differing `FilePath` on a changed
-  doc **is** the file move (old → new), and the renamed doc's new text belongs at the *new* path.
+- **`RenameFile: true` keeps the same `DocumentId`** and updates the document's **`Name`** (to `<NewType>.cs`) —
+  **not** its `FilePath`, which stays the old path. So detect the move by the `Name` change and build the
+  destination from `Path.GetDirectoryName(oldFilePath) + newDoc.Name`; don't diff `FilePath` (it won't differ).
+  Diff the changed docs via `updated.GetChanges(old).GetProjectChanges().GetChangedDocuments()` (returns the
+  changed `DocumentId`s — note the method is `GetChangedDocuments()`, not `…DocumentIds()`).
 - **Conflicts aren't publicly readable.** The public overload resolves them internally; `RenameAnnotation` /
   the `ConflictEngine` types are `internal`. To block on the common "new name already names a member" case, do
   a pre-flight `INamespaceOrTypeSymbol.GetMembers(newName)` check on the symbol's container instead.

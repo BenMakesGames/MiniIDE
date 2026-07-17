@@ -59,7 +59,7 @@ public static class RenameService
         RenameFileMove? move = null;
 
         foreach (var projectChange in updated.GetChanges(solution).GetProjectChanges())
-            foreach (var docId in projectChange.GetChangedDocumentIds())
+            foreach (var docId in projectChange.GetChangedDocuments())
             {
                 ct.ThrowIfCancellationRequested();
                 var oldDoc = solution.GetDocument(docId);

@@ -17,7 +17,12 @@ public class SyntaxHighlightService
     public SyntaxHighlightService()
     {
         var proj = _workspace.AddProject("Adhoc", LanguageNames.CSharp);
+        // IL3000: false positive. This is a framework-dependent single-file app (SelfContained=false), so
+        // CoreLib is not embedded — it loads from the shared framework and Assembly.Location is a valid path.
+        // AppContext.BaseDirectory (the analyzer's suggestion) would be wrong: CoreLib isn't in the app dir.
+#pragma warning disable IL3000
         proj = proj.AddMetadataReference(MetadataReference.CreateFromFile(typeof(object).Assembly.Location));
+#pragma warning restore IL3000
         _workspace.TryApplyChanges(proj.Solution);
         _projectId = proj.Id;
     }

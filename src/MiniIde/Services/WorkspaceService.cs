@@ -60,7 +60,7 @@ public class WorkspaceService : IDisposable
         _ws?.Dispose();
         _ws = MSBuildWorkspace.Create();
         _ws.SkipUnrecognizedProjects = true;
-        _ws.WorkspaceFailed += (_, e) => Progress?.Invoke($"[warn] {e.Diagnostic.Message}");
+        _ws.RegisterWorkspaceFailedHandler(e => Progress?.Invoke($"[warn] {e.Diagnostic.Message}"));
         var progress = new Progress<ProjectLoadProgress>(p =>
             Progress?.Invoke($"{p.Operation} {Path.GetFileNameWithoutExtension(p.FilePath)}"));
         _solution = await _ws.OpenSolutionAsync(_solutionPath!, progress, ct);

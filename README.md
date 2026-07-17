@@ -1,6 +1,6 @@
 **tl;dr:** this is an experimental C# IDE, intended to be used alongside an external agentic AI that runs in its own thang (such as Claude Code's TUI (flawed though it may be)).
 
-it used to support free-text input - you know, like a normal editor - but I decided to make it a "read-only IDE", and am adding refactor tools, instead. (read-only solves more problems than allowing live editing solved.)
+it used to support free-text input - you know, like a normal editor - but **I decided to make it a "read-only IDE"**, and am adding refactor tools, instead. (read-only solves more problems than allowing live editing solved.)
 
 > 🧚 **hey, listen!** [you can support my development of open-source software on Patreon](https://www.patreon.com/BenMakesGames), and/or [check out my game Astromino, on Steam!](https://store.steampowered.com/app/4644350/Astromino/)
 

@@ -87,7 +87,16 @@ public static class RenameService
 
     // The file move that accompanies a rename, or null. Only a *type* whose file's base name equals the type's
     // (old) name qualifies (the ticket's `Foo` in `Foo.cs` → `Bar.cs` case); a member rename never moves a file.
-    // Uses the first matching in-source declaration — a partial type split across files is out of scope.
+    //
+    // Known limitation (acknowledged YAGNI, not a bug): moves at most ONE file — the first in-source
+    // declaration whose base name matches. It fails *safe* (under-moves; the C# in every file is still rewritten
+    // by Roslyn, only the sibling file names lag). Not handled:
+    //   • Partial types split across files (`Foo.cs` + `Foo.Serialization.cs`) — only `Foo.cs` moves.
+    //   • Blazor triads (`Component.razor` / `.razor.css` / `.razor.cs`) — `.razor`/`.razor.css` aren't Roslyn
+    //     Documents at all (they need Razor tooling this IDE doesn't host), and `.razor.cs`'s base name is
+    //     `Component.razor`, not the type name, so none of them match.
+    // Going past one file means Roslyn's `Renamer.RenameDocumentAsync` / `RenameDocumentActionSet` (related /
+    // linked document renames) rather than this base-name check. Out of scope until a real need shows up.
     private static RenameFileMove? TypeFileMove(ISymbol symbol, string newName)
     {
         if (symbol is not INamedTypeSymbol type) return null;

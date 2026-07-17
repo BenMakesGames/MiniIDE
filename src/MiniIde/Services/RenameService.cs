@@ -15,12 +15,15 @@ namespace MiniIde.Services;
 /// symbol under the caret, it computes every reference rewrite (and, for a type whose file name matches, the
 /// file rename) as an in-memory diff, and — as a separate step — writes that diff to disk.
 ///
-/// <para><b>Confirmed API</b> (Roslyn <c>5.6.0</c>, <c>Microsoft.CodeAnalysis.Workspaces</c>):
+/// <para><b>API</b> (Roslyn <c>5.6.0</c>, <c>Microsoft.CodeAnalysis.Workspaces</c>):
 /// <c>Renamer.RenameSymbolAsync(Solution, ISymbol, SymbolRenameOptions, string newName, CancellationToken)</c>
 /// returning a new <see cref="Solution"/>, with <see cref="SymbolRenameOptions"/> exposing
-/// <c>RenameOverloads</c> / <c>RenameInStrings</c> / <c>RenameInComments</c> / <c>RenameFile</c> init flags.
-/// Only code references + the file rename are wanted, so <c>RenameFile</c> is on and the other three are off
-/// (out of scope: comments, strings, overloads).</para>
+/// <c>RenameOverloads</c> / <c>RenameInStrings</c> / <c>RenameInComments</c> / <c>RenameFile</c> init flags —
+/// <b>all off here</b>. Comments/strings/overloads are out of scope. <c>RenameFile</c> is off too, but for a
+/// subtler reason: it renames the <em>declaring</em> file of <em>any</em> renamed symbol to the new name (so
+/// renaming a method in <c>Code.cs</c> would rename the file to <c>Fetch.cs</c>). The ticket wants a file move
+/// only for a type whose file name matches its own name, so <see cref="TypeFileMove"/> computes that move and
+/// we take only Roslyn's reference rewrites.</para>
 ///
 /// <para><b>Compute never touches disk</b> — it forks the immutable snapshot in memory, exactly like
 /// <see cref="WorkspaceService"/>'s overlay. <see cref="ApplyToDisk"/> is the only member that writes, mirroring
@@ -51,13 +54,17 @@ public static class RenameService
         var conflicts = CollisionsWith(source, newName);
         if (conflicts.Count > 0) return RenameOutcome.Conflicted(conflicts);
 
+        // RenameFile is deliberately OFF: Roslyn's file rename fires for *any* renamed symbol, renaming the
+        // declaring file to the new name (so renaming a method `Target` in `Code.cs` would rename the file to
+        // `Fetch.cs` — wrong). The ticket wants a file move only for a type whose file name matches its own
+        // name, so we compute that move ourselves below and just take Roslyn's reference rewrites here.
         var options = new SymbolRenameOptions(
-            RenameOverloads: false, RenameInStrings: false, RenameInComments: false, RenameFile: true);
+            RenameOverloads: false, RenameInStrings: false, RenameInComments: false, RenameFile: false);
         var updated = await Renamer.RenameSymbolAsync(solution, source, options, newName, ct);
 
-        var changed = new List<RenamedFile>();
-        RenameFileMove? move = null;
+        var move = TypeFileMove(source, newName);
 
+        var changed = new List<RenamedFile>();
         foreach (var projectChange in updated.GetChanges(solution).GetProjectChanges())
             foreach (var docId in projectChange.GetChangedDocuments())
             {
@@ -67,31 +74,34 @@ public static class RenameService
                 if (oldDoc?.FilePath is null || newDoc is null) continue;
 
                 var text = await newDoc.GetTextAsync(ct);
-                var newPath = ResolveNewPath(oldDoc, newDoc);
-
-                // RenameFile (Foo.cs → Bar.cs on a type-matched file) keeps the same DocumentId; a differing
-                // path is the move, and the renamed document's new text belongs at the NEW path.
-                if (!string.Equals(oldDoc.FilePath, newPath, StringComparison.Ordinal))
-                    move = new RenameFileMove(oldDoc.FilePath, newPath);
-
-                changed.Add(new RenamedFile(newPath, text.ToString()));
+                // The type-matched file's new text belongs at its NEW path (the move renames it); every other
+                // changed file keeps its path. Paths compare case-insensitively (filesystem / FileId convention).
+                var path = move is not null && string.Equals(oldDoc.FilePath, move.OldPath, StringComparison.OrdinalIgnoreCase)
+                    ? move.NewPath
+                    : oldDoc.FilePath;
+                changed.Add(new RenamedFile(path, text.ToString()));
             }
 
         return RenameOutcome.Renamed(changed, move);
     }
 
-    // Where a changed document's text should land. RenameFile updates the document's *Name* (to <NewType>.cs)
-    // but not its FilePath, so a file rename is detected by the name change and the destination is the old
-    // directory + new name. A FilePath that Roslyn *did* update is honored first, in case that ever changes.
-    private static string ResolveNewPath(Document oldDoc, Document newDoc)
+    // The file move that accompanies a rename, or null. Only a *type* whose file's base name equals the type's
+    // (old) name qualifies (the ticket's `Foo` in `Foo.cs` → `Bar.cs` case); a member rename never moves a file.
+    // Uses the first matching in-source declaration — a partial type split across files is out of scope.
+    private static RenameFileMove? TypeFileMove(ISymbol symbol, string newName)
     {
-        var oldPath = oldDoc.FilePath!;
-        if (newDoc.FilePath is { } fp && !string.Equals(fp, oldPath, StringComparison.Ordinal))
-            return fp;
-        if (!string.Equals(oldDoc.Name, newDoc.Name, StringComparison.Ordinal)
-            && Path.GetDirectoryName(oldPath) is { } dir)
-            return Path.Combine(dir, newDoc.Name);
-        return oldPath;
+        if (symbol is not INamedTypeSymbol type) return null;
+        foreach (var loc in type.Locations)
+        {
+            if (!loc.IsInSource) continue;
+            var path = loc.SourceTree?.FilePath;
+            if (path is null) continue;
+            if (!string.Equals(Path.GetFileNameWithoutExtension(path), type.Name, StringComparison.Ordinal)) continue;
+            var dir = Path.GetDirectoryName(path);
+            if (dir is null) continue;
+            return new RenameFileMove(path, Path.Combine(dir, newName + Path.GetExtension(path)));
+        }
+        return null;
     }
 
     /// <summary>Writes a successful <see cref="RenameOutcome"/> to disk: the file move first (so no content

@@ -76,15 +76,18 @@ Lives in **`Microsoft.CodeAnalysis.Workspaces`** (namespace `Microsoft.CodeAnaly
 present via `Microsoft.CodeAnalysis.CSharp.Workspaces`. Forks the immutable snapshot; **doesn't** write disk.
 
 - `SymbolRenameOptions` is a record-struct: `RenameOverloads` / `RenameInStrings` / `RenameInComments` /
-  `RenameFile` init flags. For code-references-only + file-rename-on-type-match, set `RenameFile: true`, rest
-  `false`.
+  `RenameFile` init flags. For code-references-only, set **all four `false`** (see the `RenameFile` gotcha).
 - **Gate on in-source first**: `SymbolFinder.FindSourceDefinitionAsync(symbol, solution, ct)` — null (or no
   in-source location) means a framework/NuGet symbol; refuse (no metadata-as-source rewrite).
-- **`RenameFile: true` keeps the same `DocumentId`** and updates the document's **`Name`** (to `<NewType>.cs`) —
-  **not** its `FilePath`, which stays the old path. So detect the move by the `Name` change and build the
-  destination from `Path.GetDirectoryName(oldFilePath) + newDoc.Name`; don't diff `FilePath` (it won't differ).
-  Diff the changed docs via `updated.GetChanges(old).GetProjectChanges().GetChangedDocuments()` (returns the
-  changed `DocumentId`s — note the method is `GetChangedDocuments()`, not `…DocumentIds()`).
+- **`RenameFile: true` is too aggressive for a "type whose file name matches" rule.** It renames the
+  *declaring* file of **any** renamed symbol to `<newName>.cs` — renaming a *method* `Target` in `Code.cs`
+  renames the file to `Fetch.cs`, not just a type in a matching-named file. So leave `RenameFile: false` and
+  compute the move yourself: only when the symbol is an `INamedTypeSymbol` **and** its declaring file's base
+  name equals the (old) type name, move `dir/OldName.cs → dir/NewName.cs`. (Aside: when `RenameFile` *does*
+  rename, it updates the document's `Name`, **not** its `FilePath` — so a `FilePath` diff wouldn't even see it.)
+- Diff the reference rewrites via `updated.GetChanges(old).GetProjectChanges().GetChangedDocuments()` — returns
+  the changed `DocumentId`s (the method is `GetChangedDocuments()`, **not** `…DocumentIds()`). Redirect the
+  type-file's new text to the move's new path; every other changed doc keeps its `FilePath`.
 - **Conflicts aren't publicly readable.** The public overload resolves them internally; `RenameAnnotation` /
   the `ConflictEngine` types are `internal`. To block on the common "new name already names a member" case, do
   a pre-flight `INamespaceOrTypeSymbol.GetMembers(newName)` check on the symbol's container instead.

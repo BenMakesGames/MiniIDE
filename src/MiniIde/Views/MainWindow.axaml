@@ -26,7 +26,7 @@
                                     <Setter Property="Opacity" Value="0.4"/>
                                 </Style>
                             </ContextMenu.Styles>
-                            <MenuItem Name="SolutionCtxOpenNew" Header="Open _new solution..." Click="OnOpenSolutionClick"/>
+                            <MenuItem Name="SolutionCtxOpenNew" Header="_Open solution..." Click="OnOpenSolutionClick"/>
                             <MenuItem Header="_Reload solution" Click="OnReloadSolutionClick">
                                 <MenuItem.Icon>
                                     <TextBlock Text="{x:Static m:ActionIcon.Reload}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#3FB950" VerticalAlignment="Center"/>
@@ -224,6 +224,7 @@
                         <Grid RowDefinitions="Auto,*,Auto" DataContext="{Binding Find}">
                             <DockPanel Grid.Row="0" Margin="4">
                                 <CheckBox DockPanel.Dock="Right" Content="Regex" IsChecked="{Binding UseRegex}" Margin="6,0,0,0"/>
+                                <CheckBox DockPanel.Dock="Right" Content="Case-sensitive" IsChecked="{Binding CaseSensitive}" Margin="6,0,0,0"/>
                                 <Button DockPanel.Dock="Right" Content="Search" Command="{Binding SearchCommand}" Margin="6,0,0,0"/>
                                 <TextBox x:Name="FindBox" Text="{Binding Query, Mode=TwoWay}" PlaceholderText="Search..."
                                          KeyDown="OnFindKeyDown"/>

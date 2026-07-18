@@ -23,6 +23,7 @@ public partial class FindResultsViewModel : ViewModelBase
 
     [ObservableProperty] private string _query = "";
     [ObservableProperty] private bool _useRegex;
+    [ObservableProperty] private bool _caseSensitive;
     [ObservableProperty] private bool _isSearching;
     [ObservableProperty] private string _status = "";
     [ObservableProperty] private FindHit? _selected;
@@ -66,7 +67,7 @@ public partial class FindResultsViewModel : ViewModelBase
         var root = System.IO.Path.GetDirectoryName(_sln.SolutionPath)!;
         try
         {
-            await foreach (var hit in _search.SearchAsync(root, Query, UseRegex, _cts.Token))
+            await foreach (var hit in _search.SearchAsync(root, Query, UseRegex, CaseSensitive, _cts.Token))
                 Dispatcher.UIThread.Post(() => Results.Add(hit));
             Status = Plural.Of(Results.Count, "match", "es");
         }

@@ -12,11 +12,12 @@ public class SearchService
     private readonly FileGrepper _grepper = new();
 
     public async IAsyncEnumerable<FindHit> SearchAsync(
-        string root, string query, bool regex,
+        string root, string query, bool regex, bool caseSensitive,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var options = new GrepOptions(
             Regex: regex,
+            CaseSensitive: caseSensitive,
             SkipDirectory: static path => IdeDirectories.Pruned.Contains(Path.GetFileName(path)));
 
         await foreach (var hit in _grepper.GrepAsync(root, query, options, ct))

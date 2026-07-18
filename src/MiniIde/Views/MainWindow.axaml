@@ -173,6 +173,8 @@
                                         <MenuItem Name="CtxSearchItem" Header="Search solution" InputGesture="Ctrl+Shift+F" Click="OnCtxSearchClick"/>
                                         <MenuItem Name="CtxFindUsagesItem" Header="Find usages" InputGesture="Shift+F12" Click="OnCtxFindUsagesClick"/>
                                         <MenuItem Name="CtxGoToDefItem" Header="Go to definition" InputGesture="F12" Click="OnCtxGoToDefClick"/>
+                                        <MenuItem Name="CtxGoToImplItem" Header="Go to _Implementation" Click="OnCtxGoToImplClick"/>
+                                        <MenuItem Name="CtxGoToSubclassesItem" Header="Go to Su_bclasses" Click="OnCtxGoToSubclassesClick"/>
                                         <Separator/>
                                         <MenuItem Name="CtxRenameItem" Header="Rename…" Click="OnCtxRenameClick"/>
                                     </ContextMenu>
@@ -222,12 +224,23 @@
                 <TabControl Background="#1E1E22" x:Name="BottomTabs">
                     <TabItem Header="Find" x:Name="FindTab">
                         <Grid RowDefinitions="Auto,*,Auto" DataContext="{Binding Find}">
-                            <DockPanel Grid.Row="0" Margin="4">
+                            <!-- Row 0 holds two mutually-exclusive rows: the normal search inputs and the
+                                 symbol-query context banner. A symbol query (find-usages / implementations /
+                                 subclasses) sets IsContextResult; a text search clears it. Gated inline with
+                                 {Binding !X} / {Binding X} — no converter (see docs/avalonia.md). -->
+                            <DockPanel Grid.Row="0" Margin="4" IsVisible="{Binding !IsContextResult}">
                                 <CheckBox DockPanel.Dock="Right" Content="Regex" IsChecked="{Binding UseRegex}" Margin="6,0,0,0"/>
                                 <CheckBox DockPanel.Dock="Right" Content="Case-sensitive" IsChecked="{Binding CaseSensitive}" Margin="6,0,0,0"/>
                                 <Button DockPanel.Dock="Right" Content="Search" Command="{Binding SearchCommand}" Margin="6,0,0,0"/>
                                 <TextBox x:Name="FindBox" Text="{Binding Query, Mode=TwoWay}" PlaceholderText="Search..."
                                          KeyDown="OnFindKeyDown"/>
+                            </DockPanel>
+                            <DockPanel Grid.Row="0" Margin="4" IsVisible="{Binding IsContextResult}">
+                                <Button DockPanel.Dock="Left" Content="✕" Command="{Binding CloseContextCommand}"
+                                        Padding="8,2" Margin="0,0,8,0" Background="Transparent"
+                                        ToolTip.Tip="Close — back to search"/>
+                                <TextBlock Text="{Binding ContextLabel}" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"/>
                             </DockPanel>
                             <ListBox Grid.Row="1" Background="#000000" ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}">
                                 <ListBox.ItemTemplate>

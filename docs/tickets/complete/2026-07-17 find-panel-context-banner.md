@@ -91,3 +91,51 @@ If `docs/` documents the Find panel's behavior (e.g. `docs/global-find.md`), add
 - [ ] **Manual — text search after symbol search**: run a symbol query (banner shows), then run a plain-text search (via close→type→Search, or the right-click item); confirm the normal input row is shown and results update.
 - [ ] **Manual — zero vs. no-symbol**: invoke Go to Implementation on an interface with no implementers → banner shows with a "0 implementations" status; invoke a symbol action on a non-symbol (string literal) → normal input row with "No symbol found", no banner.
 - [ ] **Regression**: plain-text search via the Search button and Enter-in-box still work; navigation-on-select still opens hits.
+
+## Learnings
+
+### Verification status
+`dotnet build` (MiniIde) and `dotnet test` both pass — **54 passed, 0 failed**, including the 4 new
+`FindResultsViewModelTests`. The **automated** VM Test-Plan item is fully covered. The **manual GUI** items
+(right-click checkbox defaults, Ctrl+Shift+F checkbox preservation, the banner appearing/closing, zero-vs-no-
+symbol) were **not** driven — same call as the prerequisite (`go-to-implementation-and-subclasses`): scripting
+Avalonia context menus + checkbox observation is out of proportion to the change. The XAML wiring is validated
+indirectly by the axaml build resolving the new `IsContextResult` / `ContextLabel` / `CloseContextCommand`
+bindings. A human should run the manual items once.
+
+### Architectural decisions
+- **Open Decision 3 (split shape) → `bool literalDefaults = false` parameter on `TrySearchTermInEditor`**, not a
+  wrapper. The context-menu caller passes `literalDefaults: true`; the Ctrl+Shift+F caller passes nothing
+  (false). One method, one guard, defaults applied only past the guard — the guard-ordering gotcha holds by
+  construction (a failed invoke returns before any checkbox write).
+- **`ShowResults` gained `bannerLabel` before the defaulted `pluralSuffix`.** Signature is now
+  `ShowResults(hits, noun, bannerLabel, pluralSuffix = "s")`. Every symbol path builds its own label
+  (`Usages of "X"` / `Implementations of "X"` / `Subclasses of "X"`) in the VM flow method and passes it
+  through — the panel stays origin-agnostic, only now it also carries the banner text.
+- **`ShowNoResults` defensively clears context mode** (sets `IsContextResult = false`), not just "leaves it
+  false". A banner from query A followed by a no-symbol query B must revert to the input row — clearing handles
+  that transition. On a fresh VM it's a no-op, so the "leaves the flag false" contract still holds.
+- **Open Decisions 1/2/4/5 kept at defaults**: banner copy `Usages/Implementations/Subclasses of "X"`; subject =
+  clicked identifier text (`CodeSymbolContext.Term`, view-side, no `ISymbol` crosses into the VM); close glyph a
+  bare transparent `✕` `Button`; status kept on close (results are still shown).
+
+### Interesting tidbits
+- **The subject is the same primitive the Search path already uses** — `CodeSymbolContext.At(editor, state).Term`.
+  Factored the three handlers' identical call into one `SubjectAt(editor)` helper. Null/empty degrades to
+  `Usages of ""`, which is acceptable (count/results unaffected).
+- **`FindResultsViewModel` constructs cheaply in isolation** — `new SearchService()`, `new SolutionService()`,
+  and a `_ => Task.CompletedTask` open callback. The synchronous state methods (`ShowResults`, `ShowNoResults`,
+  `CloseContext`) never touch search/disk, so the VM test needed no fixture or mocking.
+
+### Related areas affected
+- The three VM flow methods (`FindReferencesAsync` / `FindImplementationsAsync` / `FindSubclassesAsync`) grew a
+  `string? subject` parameter — the only callers are the three view handlers (+ Shift+F12 via `FindRefsAsync`),
+  all updated. The `WorkspaceService.FindReferencesAsync` service method is a distinct overload and was
+  untouched.
+- `docs/global-find.md` gained a "Find panel input row" section documenting the literal-search defaults and the
+  context banner.
+
+### Rejected alternatives
+- **A converter for the input-vs-banner swap** — rejected per `docs/avalonia.md`: two sibling elements on
+  `Grid.Row="0"` gated inline with `{Binding !IsContextResult}` / `{Binding IsContextResult}`, no
+  `IValueConverter`.

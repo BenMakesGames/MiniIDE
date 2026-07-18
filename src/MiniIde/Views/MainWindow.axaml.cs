@@ -544,7 +544,7 @@ public partial class MainWindow : Window
         catch (Exception ex) { Vm.Status = $"Open new solution failed: {ex.Message}"; }
     }
 
-    // ── Code-editor context menu (Search / Find usages / Go to definition) ──
+    // ── Code-editor context menu (Search / Find usages / Go to definition / Go to Implementation / Go to Subclasses / Rename) ──
 
     // FindActiveEditor matched a code editor, so ActiveTab is an EditorTabViewModel and its FilePath is non-null.
     private async Task GoToDefinitionAsync()
@@ -560,9 +560,33 @@ public partial class MainWindow : Window
     {
         var editor = FindActiveEditor();
         if (editor is null) return;
-        await Vm.FindReferencesAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset);
+        await Vm.FindReferencesAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset, SubjectAt(editor));
         ShowBottomTab(FindTab);
     }
+
+    // Go to Implementation / Go to Subclasses surface into the same Find panel as Find usages, so they share its
+    // reveal discipline: run against the caret, then bring the Find tab forward.
+    private async Task FindImplsAsync()
+    {
+        var editor = FindActiveEditor();
+        if (editor is null) return;
+        await Vm.FindImplementationsAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset, SubjectAt(editor));
+        ShowBottomTab(FindTab);
+    }
+
+    private async Task FindSubclassesAsync()
+    {
+        var editor = FindActiveEditor();
+        if (editor is null) return;
+        await Vm.FindSubclassesAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset, SubjectAt(editor));
+        ShowBottomTab(FindTab);
+    }
+
+    // The banner subject is the clicked identifier text — the same view-side primitive the Search path uses
+    // (CodeSymbolContext.Term), so no Roslyn symbol crosses into the VM. A null/empty subject is fine: the
+    // banner label just quotes an empty string, and the results/count are unaffected.
+    private string? SubjectAt(TextEditor editor) =>
+        CodeSymbolContext.At(editor, _codeEditors.StateFor(editor)).Term;
 
     private void OnCodeCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
@@ -588,21 +612,37 @@ public partial class MainWindow : Window
                         // framework type) is the authoritative in-source check at invoke time — see RenameSymbolAsync.
                         mi.IsEnabled = context.SymbolEligible;
                         break;
+                    // Kind-aware, so NOT folded into the shared SymbolEligible case: Go to Implementation lights
+                    // only on interfaces/overridable members, Go to Subclasses only on class/record/interface
+                    // names. Still approximate (classifications can't see abstract/virtual, and an unclassified
+                    // file enables leniently) — a query that resolves to nothing just shows "0" in the Find panel.
+                    case "CtxGoToImplItem":
+                        mi.IsEnabled = context.ImplementationEligible;
+                        break;
+                    case "CtxGoToSubclassesItem":
+                        mi.IsEnabled = context.SubclassEligible;
+                        break;
                 }
     }
 
-    private void OnCtxSearchClick(object? sender, RoutedEventArgs e) => TrySearchTermInEditor();
+    private void OnCtxSearchClick(object? sender, RoutedEventArgs e) => TrySearchTermInEditor(literalDefaults: true);
 
     /// <summary>Searches the solution for the selection (or identifier under the caret) in the active editor,
     /// then reveals the Find tab. Shared by the "Search solution" context-menu item and the Ctrl+Shift+F
     /// shortcut. Returns false without side effects when there's no active editor, no term, or no solution —
-    /// letting the keyboard path fall back to simply focusing the Find box.</summary>
-    private bool TrySearchTermInEditor()
+    /// letting the keyboard path fall back to simply focusing the Find box.
+    ///
+    /// <para><paramref name="literalDefaults"/> is set only by the context-menu path: a clicked token is an
+    /// exact literal, so it forces Regex off and Case-sensitive on. Ctrl+Shift+F passes false and
+    /// <b>deliberately leaves both checkboxes as the user set them</b> — a behavior change from when it forced
+    /// Regex off. The defaults are applied only past the guard (when a term will actually run), so a failed
+    /// invoke never silently flips the user's checkbox state.</para></summary>
+    private bool TrySearchTermInEditor(bool literalDefaults = false)
     {
         var editor = FindActiveEditor();
         var term = CodeSymbolContext.At(editor, _codeEditors.StateFor(editor)).Term;
         if (string.IsNullOrEmpty(term) || Vm.Solution.SolutionPath is null) return false;
-        Vm.Find.UseRegex = false; // clicked word is a literal query — avoid regex-metacharacter surprises
+        if (literalDefaults) { Vm.Find.UseRegex = false; Vm.Find.CaseSensitive = true; }
         Vm.Find.Query = term;
         Vm.Find.SearchCommand.Execute(null);
         FocusFind();
@@ -614,6 +654,10 @@ public partial class MainWindow : Window
     private async void OnCtxFindUsagesClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
 
     private async void OnCtxGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
+
+    private async void OnCtxGoToImplClick(object? sender, RoutedEventArgs e) => await FindImplsAsync();
+
+    private async void OnCtxGoToSubclassesClick(object? sender, RoutedEventArgs e) => await FindSubclassesAsync();
 
     private async void OnCtxRenameClick(object? sender, RoutedEventArgs e) => await RenameSymbolAsync();
 

@@ -341,8 +341,9 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Fills the Find panel with references to the symbol at <paramref name="caretOffset"/>. The panel
-    /// owns its own results and status; this just decides what to hand it.</summary>
-    public async Task FindReferencesAsync(string file, int caretOffset)
+    /// owns its own results and status; this just decides what to hand it. <paramref name="subject"/> is the
+    /// clicked identifier text, shown in the panel's context banner (<c>Usages of "X"</c>).</summary>
+    public async Task FindReferencesAsync(string file, int caretOffset, string? subject)
     {
         if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
         Status = "Loading workspace...";
@@ -350,7 +351,37 @@ public partial class MainWindowViewModel : ViewModelBase
         Status = "Finding references...";
         var references = await Workspace.FindReferencesAsync(file, caretOffset);
         if (references is null) { Find.ShowNoResults("No symbol found"); Status = "No symbol found"; return; }
-        Find.ShowReferences(references);
+        Find.ShowResults(references, "reference", $"Usages of \"{subject}\"");
+        Status = Find.Status;
+    }
+
+    /// <summary>Fills the Find panel with the in-source implementers/overrides of the symbol at
+    /// <paramref name="caretOffset"/>. Mirrors <see cref="FindReferencesAsync"/>: the panel owns its results and
+    /// status; this decides what to hand it. <paramref name="subject"/> feeds the context banner.</summary>
+    public async Task FindImplementationsAsync(string file, int caretOffset, string? subject)
+    {
+        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
+        Status = "Loading workspace (first use may take a while)...";
+        await EnsureWorkspaceReadyAsync();
+        Status = "Finding implementations...";
+        var results = await Workspace.FindImplementationsAsync(file, caretOffset);
+        if (results is null) { Find.ShowNoResults("No symbol found"); Status = "No symbol found"; return; }
+        Find.ShowResults(results, "implementation", $"Implementations of \"{subject}\"");
+        Status = Find.Status;
+    }
+
+    /// <summary>Fills the Find panel with the in-source derived types (transitively) of the type at
+    /// <paramref name="caretOffset"/>. Mirrors <see cref="FindReferencesAsync"/>. <paramref name="subject"/>
+    /// feeds the context banner.</summary>
+    public async Task FindSubclassesAsync(string file, int caretOffset, string? subject)
+    {
+        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
+        Status = "Loading workspace (first use may take a while)...";
+        await EnsureWorkspaceReadyAsync();
+        Status = "Finding subclasses...";
+        var results = await Workspace.FindSubclassesAsync(file, caretOffset);
+        if (results is null) { Find.ShowNoResults("No symbol found"); Status = "No symbol found"; return; }
+        Find.ShowResults(results, "subclass", $"Subclasses of \"{subject}\"", "es");
         Status = Find.Status;
     }
 

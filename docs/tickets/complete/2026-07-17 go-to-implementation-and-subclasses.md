@@ -107,3 +107,69 @@ Add two rows to the API-map table: Go to Implementation → `SymbolFinder.FindIm
 - [ ] **Manual — happy path**: open a solution, right-click an interface name → confirm Go to Implementation is enabled and lists implementers in the Find panel with "N implementations"; selecting one navigates. Right-click a base class → Go to Subclasses lists derived types.
 - [ ] **Manual — dimming**: right-click a local variable / parameter → both items dimmed; right-click a class name → Go to Subclasses enabled, Go to Implementation dimmed (unless the classifier hasn't run); right-click in a non-C# tab → both dimmed.
 - [ ] **Regression**: Search / Find usages / Go to definition / Rename still work and their enablement is unchanged.
+
+## Learnings
+
+### Verification status
+Unlike the safe-rename ticket (which ran headless with no SDK), this ran on a Windows box with the .NET SDK
+present. `dotnet build` (MiniIde) and `dotnet test` (**50 passed, 0 failed** — including the 9 new
+`WorkspaceNavigationTests`) both succeeded. The **automated** Test-Plan items are all covered by
+`WorkspaceNavigationTests`. The **manual GUI** items (menu dimming, right-click → Find panel, click-to-navigate)
+were **not** exercised — driving Avalonia context menus programmatically is out of proportion to the change, and
+the menu wiring is validated indirectly by the compiled-bindings axaml build resolving the new named items and
+`Click`/`Opening` handlers. A human should still run the three manual items once.
+
+### API confirmation (done against the restored DLL, not from memory)
+Reflected the `5.6.0` `Microsoft.CodeAnalysis.Workspaces.dll` surface via a `MetadataLoadContext` throwaway
+before writing any query. Confirmed:
+- `FindImplementationsAsync(ISymbol, Solution, IImmutableSet<Project>? projects = null, CancellationToken = default)` — the `ISymbol` overload (a separate `INamedTypeSymbol, …, bool transitive, …` overload also exists; the `ISymbol`-typed argument binds to the former unambiguously).
+- `FindOverridesAsync(ISymbol, Solution, IImmutableSet<Project>? = null, CancellationToken = default)`.
+- `FindDerivedClassesAsync` / `FindDerivedInterfacesAsync(INamedTypeSymbol, Solution, bool transitive = <opt>, IImmutableSet<Project>? = null, CancellationToken = default)` — `transitive` **is** a defaulted parameter (passed named `transitive: true`), not a distinct overload for interfaces; `FindDerivedClassesAsync` has both a no-`transitive` overload and the `transitive` one.
+- `projects` is optional/nullable on all four → `projects: null` searches the whole solution.
+
+### Architectural decisions
+- **Union guard narrowed to member kinds (deviation from the literal ticket condition).** The ticket said union
+  `FindOverridesAsync` "when the symbol is an overridable member (`symbol.IsAbstract || symbol.IsVirtual ||
+  symbol.IsOverride`)". Taken literally, an **interface or abstract *type*** also reports `IsAbstract == true`,
+  which would fire a needless whole-solution overrides scan and pass a *type* symbol where `FindOverridesAsync`
+  expects a member. Guarded to `symbol is IMethodSymbol or IPropertySymbol or IEventSymbol && (…IsAbstract…)`.
+  Strictly correct (only members have overrides) and cheaper; the `IFoo`-type test confirms the type path still
+  returns just its implementers.
+- **Open Decision 4 → predicate methods on `SymbolClassifications`.** Added `AllowImplementationActions` /
+  `AllowSubclassActions` beside `AllowSymbolActions`, each backed by its own allowlist (`Implementable` =
+  Interface/Method/Property/Event; `Subclassable` = Class/RecordClass/Interface). Factored the three predicates'
+  shared "empty → allow, else any-match" body into one private `Allow(covering, allowlist)` — keeps the
+  classification-name knowledge in one file and the leniency identical across all three.
+- **Open Decision 1 → always list; Decision 2 → transitive; Decision 3 → no keybinding.** All defaults kept. No
+  `Ctrl+F12` wired (menu-only per the request).
+- **One shared `MapSymbolsToHitsAsync` helper** maps result `ISymbol`s → `FindHit`s (in-source locations only,
+  deduped on `SourceLocation`), so implementations and subclasses can't drift in how they build previews. Preview
+  line text comes from `loc.SourceTree.GetTextAsync()` (not a `FindDocument` round-trip) — the tree is already in
+  hand on the location.
+- **`ShowReferences` → `ShowResults(hits, noun, pluralSuffix = "s")`.** The ticket's suggested `ShowResults(hits,
+  noun)` + `Plural.Of(count, noun)` would render "0 subclasss" — `Plural.Of` already takes a suffix, so the pass-
+  through `pluralSuffix` param ("subclass" + "es") was the pit-of-success fix. Find usages passes `"reference"`
+  (default "s"); implementations `"implementation"`; subclasses `"subclass", "es"`.
+
+### Interesting tidbits
+- **"No symbol" is genuinely hard to hit.** A caret on almost any word resolves *something* (even `namespace Lib`
+  resolves the namespace). The reliable null case is a caret **inside a string literal** — used for the
+  both-queries-return-null test, mirroring `FindReferences`'s numeric-literal trick.
+- **`FindDerivedClassesAsync` excludes interface implementations by design**, so an interface caret's "subclasses"
+  are its derived *interfaces* (`FindDerivedInterfacesAsync`); implementers stay under Go to Implementation. The
+  two commands intentionally cover disjoint sets — no dedup between them (Scope: out).
+- **Framework interfaces don't leak metadata implementers.** `FindImplementationsAsync(IDisposable, solution)`
+  only searches the solution's source, and `MapSymbolsToHitsAsync` filters `IsInSource` on top — so the
+  `IDisposable` test lists only the in-source `Res`, zero metadata entries.
+
+### Related areas affected
+- `FindResultsViewModel.ShowReferences` renamed to `ShowResults` (the sole find-refs caller updated); the panel
+  stays origin-agnostic. `CodeSymbolContext` grew two record fields (`ImplementationEligible`,
+  `SubclassEligible`) and its `None` constant — every construction site is the single `At()` factory.
+
+### Rejected alternatives
+- **Folding the two items into the shared `SymbolEligible` menu case** — rejected: their dimming is kind-aware
+  (interfaces/members vs. class/record/interface), so each gets its own `case` reading its own eligibility bool.
+- **A `switch` expression with `await` arms in `FindSubclassesAsync`** — used explicit `if/else` instead; the
+  best-common-type across `IEnumerable<INamedTypeSymbol>` arms and an empty `ISymbol[]` is fiddly, and the
+  `if/else` reads plainly.

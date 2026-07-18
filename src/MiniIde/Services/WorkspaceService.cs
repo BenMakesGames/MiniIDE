@@ -355,6 +355,96 @@ public class WorkspaceService : IDisposable
         return results;
     }
 
+    /// <summary>
+    /// Returns the in-source symbols that <em>implement</em> or <em>override</em> the symbol at
+    /// <paramref name="position"/> (possibly empty), or <c>null</c> when no symbol resolves there. Unions two
+    /// queries so an abstract/virtual base member resolves to its overrides as well as an interface member to
+    /// its implementers: <c>SymbolFinder.FindImplementationsAsync</c> (interface types and interface members)
+    /// plus, when the caret symbol is itself an overridable member,
+    /// <c>SymbolFinder.FindOverridesAsync</c> (class-member overrides — which <c>FindImplementationsAsync</c>
+    /// does not cover). A concrete symbol simply yields an empty list.
+    /// <para>API (Roslyn <c>5.6.0</c>, <c>Microsoft.CodeAnalysis.Workspaces</c>):
+    /// <c>FindImplementationsAsync(ISymbol, Solution, IImmutableSet&lt;Project&gt;?, CancellationToken)</c> and
+    /// <c>FindOverridesAsync(ISymbol, Solution, IImmutableSet&lt;Project&gt;?, CancellationToken)</c>, both
+    /// returning <c>Task&lt;IEnumerable&lt;ISymbol&gt;&gt;</c>; <c>projects: null</c> searches the whole
+    /// solution.</para>
+    /// </summary>
+    public async Task<IReadOnlyList<FindHit>?> FindImplementationsAsync(
+        string filePath, int position, CancellationToken ct = default)
+    {
+        var symbol = await ResolveSymbolAsync(filePath, position, ct);
+        if (symbol is null) return null;
+
+        var found = new List<ISymbol>();
+        found.AddRange(await SymbolFinder.FindImplementationsAsync(symbol, _solution!, projects: null, ct));
+        // FindImplementationsAsync covers interface types/members only; overrides of an abstract/virtual class
+        // member come from FindOverridesAsync. Union both so a base method resolves to its overrides. Guard to
+        // member kinds: only members are overridable, and an interface/abstract *type* also reports IsAbstract —
+        // firing a needless whole-solution overrides scan (and passing a type where a member is expected).
+        if (symbol is IMethodSymbol or IPropertySymbol or IEventSymbol
+            && (symbol.IsAbstract || symbol.IsVirtual || symbol.IsOverride))
+            found.AddRange(await SymbolFinder.FindOverridesAsync(symbol, _solution!, projects: null, ct));
+
+        return await MapSymbolsToHitsAsync(found, ct);
+    }
+
+    /// <summary>
+    /// Returns the in-source derived types of the type at <paramref name="position"/> (transitively; possibly
+    /// empty), or <c>null</c> when no symbol resolves there. A class resolves to its derived classes; an
+    /// interface to its derived <em>interfaces</em> (its implementers belong to Go to Implementation, and
+    /// <c>FindDerivedClassesAsync</c> excludes interface implementations by design). A struct / enum / delegate
+    /// / record-struct — or anything that isn't a named type — has no subclasses and yields an empty list.
+    /// <para>API (Roslyn <c>5.6.0</c>): <c>FindDerivedClassesAsync(INamedTypeSymbol, Solution, bool transitive,
+    /// IImmutableSet&lt;Project&gt;?, CancellationToken)</c> and the parallel
+    /// <c>FindDerivedInterfacesAsync(...)</c>, both returning <c>Task&lt;IEnumerable&lt;INamedTypeSymbol&gt;&gt;</c>;
+    /// <c>transitive: true</c> walks the whole tree, <c>projects: null</c> the whole solution.</para>
+    /// </summary>
+    public async Task<IReadOnlyList<FindHit>?> FindSubclassesAsync(
+        string filePath, int position, CancellationToken ct = default)
+    {
+        var symbol = await ResolveSymbolAsync(filePath, position, ct);
+        if (symbol is null) return null;
+
+        IEnumerable<ISymbol> derived;
+        if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Class } cls)
+            derived = await SymbolFinder.FindDerivedClassesAsync(
+                cls, _solution!, transitive: true, projects: null, cancellationToken: ct);
+        else if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
+            derived = await SymbolFinder.FindDerivedInterfacesAsync(
+                iface, _solution!, transitive: true, projects: null, cancellationToken: ct);
+        else
+            derived = Array.Empty<ISymbol>();
+
+        return await MapSymbolsToHitsAsync(derived, ct);
+    }
+
+    // Maps result symbols to in-source FindHits: each symbol's IsInSource locations become a hit (line text for
+    // the preview, mirroring FindReferencesAsync; ToSourceLocation for the position), deduped on identical
+    // SourceLocation. Metadata/decompiled locations are skipped, so a framework implementer contributes nothing.
+    // A partial type legitimately yields several locations — that's fine, they're distinct positions.
+    private async Task<IReadOnlyList<FindHit>> MapSymbolsToHitsAsync(
+        IEnumerable<ISymbol> symbols, CancellationToken ct)
+    {
+        var results = new List<FindHit>();
+        var seen = new HashSet<SourceLocation>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol is null) continue;
+            foreach (var loc in symbol.Locations)
+            {
+                if (!loc.IsInSource || loc.SourceTree is null) continue;
+                var span = loc.GetLineSpan();
+                var location = ToSourceLocation(loc.SourceTree.FilePath, span);
+                if (!seen.Add(location)) continue;
+                var text = await loc.SourceTree.GetTextAsync(ct);
+                var line = span.StartLinePosition.Line;
+                var preview = line < text.Lines.Count ? text.Lines[line].ToString().Trim() : string.Empty;
+                results.Add(new FindHit(location, preview));
+            }
+        }
+        return results;
+    }
+
     /// <summary>The symbol referenced or declared at <paramref name="position"/>, or null when the file isn't
     /// in the solution or nothing resolves there. Shared by go-to-definition, find-references, and the rename
     /// path so none of them can disagree about what "the symbol under the caret" means — all resolve against

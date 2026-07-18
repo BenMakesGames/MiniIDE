@@ -119,5 +119,10 @@ present via `Microsoft.CodeAnalysis.CSharp.Workspaces`. Forks the immutable snap
 | Syntax highlight | `Classifier.GetClassifiedSpansAsync` |
 | Jump-to-def | `SymbolFinder.FindSourceDefinitionAsync` |
 | Find usages | `SymbolFinder.FindReferencesAsync` |
+| Go to implementation | `SymbolFinder.FindImplementationsAsync` (interface types/members) + `FindOverridesAsync` (class-member overrides) — union both |
+| Go to subclasses | `SymbolFinder.FindDerivedClassesAsync` (class) / `FindDerivedInterfacesAsync` (interface), `transitive: true` |
 | Errors/warnings | `Compilation.GetDiagnostics` |
 | Safe rename | `Renamer.RenameSymbolAsync` (+ `SymbolRenameOptions`) |
+
+- `FindImplementationsAsync` covers interfaces only, not class-member overrides — union `FindOverridesAsync` so an abstract/virtual base member resolves. `FindDerivedClassesAsync` excludes interface implementations, so an interface caret's "subclasses" are its derived *interfaces*; implementers stay under Go to Implementation.
+- All four take `projects: null` (whole solution) and map result `ISymbol`s to `FindHit`s via `symbol.Locations.Where(l => l.IsInSource)` — metadata/decompiled locations are dropped, so a framework implementer contributes no entry.

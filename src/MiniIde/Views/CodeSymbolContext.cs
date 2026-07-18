@@ -13,9 +13,14 @@ namespace MiniIde.Views;
 /// three menu properties from one value instead of re-deriving the answer inline.</para></summary>
 /// <param name="Term">The selection if there is one, else the identifier under the caret, else null.</param>
 /// <param name="SymbolEligible">Whether the caret sits on something a Roslyn symbol query could resolve.</param>
-internal readonly record struct CodeSymbolContext(string? Term, bool SymbolEligible)
+/// <param name="ImplementationEligible">Whether Go to Implementation could plausibly resolve here (an
+/// interface or an overridable member) — a stricter, kind-aware subset of <paramref name="SymbolEligible"/>.</param>
+/// <param name="SubclassEligible">Whether Go to Subclasses could plausibly resolve here (a class,
+/// record-class, or interface) — likewise a kind-aware subset.</param>
+internal readonly record struct CodeSymbolContext(
+    string? Term, bool SymbolEligible, bool ImplementationEligible, bool SubclassEligible)
 {
-    public static readonly CodeSymbolContext None = new(null, false);
+    public static readonly CodeSymbolContext None = new(null, false, false, false);
 
     /// <param name="editor">The active code editor, or null when the active tab isn't one.</param>
     /// <param name="colorizer">That editor's colorizer, for its cached classifications.</param>
@@ -29,13 +34,20 @@ internal readonly record struct CodeSymbolContext(string? Term, bool SymbolEligi
         // Symbol actions need three things: a C# document, an identifier character actually under the caret,
         // and a classification that names something resolvable. The caret already sits on the clicked token
         // (TabEditorBinder places it there on right-click), so this agrees with the F12 / Shift+F12 shortcuts.
-        var symbolEligible =
+        // The two kind-aware gates share the same first two conditions and the same cached covering set; only
+        // the allowlist differs, so Go to Implementation / Go to Subclasses light up on a narrower set than the
+        // coarse SymbolEligible (see SymbolClassifications).
+        var isCSharpIdentifier =
             tab.Mode == HighlightMode.CSharp
-            && offset >= 0 && offset < text.Length && IsIdentifierChar(text[offset])
-            && SymbolClassifications.AllowSymbolActions(
-                colorizer?.ClassificationsAt(offset) ?? Array.Empty<string>());
+            && offset >= 0 && offset < text.Length && IsIdentifierChar(text[offset]);
+        var covering = colorizer?.ClassificationsAt(offset) ?? Array.Empty<string>();
 
-        return new CodeSymbolContext(TermAt(editor, text, offset), symbolEligible);
+        var symbolEligible = isCSharpIdentifier && SymbolClassifications.AllowSymbolActions(covering);
+        var implementationEligible = isCSharpIdentifier && SymbolClassifications.AllowImplementationActions(covering);
+        var subclassEligible = isCSharpIdentifier && SymbolClassifications.AllowSubclassActions(covering);
+
+        return new CodeSymbolContext(
+            TermAt(editor, text, offset), symbolEligible, implementationEligible, subclassEligible);
     }
 
     /// <summary>The query term for the Search action: the selection if non-empty, else the identifier run

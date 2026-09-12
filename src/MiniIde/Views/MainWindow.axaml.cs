@@ -57,8 +57,14 @@ public partial class MainWindow : Window
         // would show. External tools (the agent, CLI git) own the writes under the read-only law.
         Activated += OnWindowActivated;
         // The watcher holds an OS handle and a debounce timer; a closing window wants neither, and a signal
-        // arriving mid-teardown would post to a dispatcher that is going away.
-        Closed += (_, _) => (DataContext as MainWindowViewModel)?.Watcher.Dispose();
+        // arriving mid-teardown would post to a dispatcher that is going away. Live runs go too: nothing else
+        // reaps them, so each one still going would outlive us as an orphan process (see StopAllRuns).
+        Closed += (_, _) =>
+        {
+            if (DataContext is not MainWindowViewModel vm) return;
+            vm.Watcher.Dispose();
+            vm.StopAllRuns();
+        };
         // The panel starts expanded, so the toggle's band starts at the full strip height (see TabStripHeight).
         BottomPanelToggleBand.Height = TabStripHeight;
         SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
@@ -96,7 +102,7 @@ public partial class MainWindow : Window
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (ctrl && e.Key == Key.O) { e.Handled = true; await OpenSolutionDialogAsync(); }
         else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; if (!TrySearchTermInEditor()) FocusFind(); }
-        else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) await Vm.PlayCommand.ExecuteAsync(null); }
+        else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) Vm.PlayCommand.Execute(null); }
         else if (e.Key == Key.F12 && !shift) { e.Handled = true; await GoToDefinitionAsync(); }
         else if (e.Key == Key.F12 && shift) { e.Handled = true; await FindRefsAsync(); }
     }
@@ -153,6 +159,21 @@ public partial class MainWindow : Window
             await tab.CloseCommand.ExecuteAsync(null);
     }
 
+    // Middle-click anywhere on a tab header closes that tab, via the same CloseCommand the ✕ button runs (so
+    // save-on-close / stop-a-live-run still happen). The middle button has no Click/Tapped event in Avalonia —
+    // it only surfaces as PointerUpdateKind on a press — so this is a PointerPressed handler. Bubbling (not
+    // tunneling like the tree/bottom-tab handlers): we *want* to mark the press handled, but only in the
+    // middle-button branch, so left-click selection and the right-click ContextMenu are untouched.
+    private async void OnTabHeaderPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control c) return;
+        if (e.GetCurrentPoint(c).Properties.PointerUpdateKind != PointerUpdateKind.MiddleButtonPressed) return;
+        if (c.DataContext is not TabViewModelBase tab) return;
+
+        e.Handled = true;
+        await tab.CloseCommand.ExecuteAsync(null);
+    }
+
     private static string? GetTargetPath(object? dataContext) => dataContext switch
     {
         TreeNode { Path: not null } tn => tn.Path,
@@ -172,6 +193,49 @@ public partial class MainWindow : Window
                 mi.IsEnabled = hasSolution;
     }
 
+    /// <summary>Fills the tree's Run submenu for the row being right-clicked. Built here rather than bound
+    /// because each row is a (this project × this configuration) pair: the project is the row's DataContext
+    /// and the configurations live on the view model, and no single binding source has both. Rebuilt on every
+    /// open, so a solution reload can never leave a stale configuration on the menu — and picking one runs it
+    /// without touching the header's own selection.
+    ///
+    /// <para>Hung off the row's ContextRequested rather than the menu's Opening for one hard reason: a
+    /// ContextMenu does not inherit its DataContext until it is actually shown, so at Opening time the node is
+    /// still null. The row always has it.</para></summary>
+    private void OnTreeCtxRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (sender is not Control row || row.ContextMenu is not { } cm) return;
+        var run = cm.Items.OfType<MenuItem>().FirstOrDefault(mi => mi.Name == "TreeCtxRun");
+        // Non-project rows hide the item declaratively (TreeNode.IsProject) and have nothing to fill.
+        if (run is null || row.DataContext is not TreeNode { Kind: NodeKind.Project, Path: not null } node) return;
+
+        run.Items.Clear();
+        var project = Vm.Projects.FirstOrDefault(
+            p => string.Equals(p.Path, node.Path, StringComparison.OrdinalIgnoreCase));
+        var configurations = Vm.Solution.Configurations;
+
+        // Disabled-with-a-reason rather than hidden: "you can't run this one" is worth saying, and an empty
+        // submenu that silently does nothing is worse than a greyed item that explains itself.
+        var blocked =
+            project is null ? "This project isn't part of the loaded solution"
+            : !project.IsRunnable ? $"{project.Name} isn't a runnable project"
+            : configurations.Count == 0 ? "The solution declares no build configurations"
+            : null;
+        run.IsEnabled = blocked is null;
+        ToolTip.SetTip(run, blocked);
+        if (blocked is not null) return;
+
+        foreach (var configuration in configurations)
+        {
+            // Underscores are access-key markers in a menu header, so a configuration named "Hot_Reload" would
+            // otherwise render as "HotReload" with an odd shortcut. Doubling escapes them.
+            var item = new MenuItem { Header = configuration.Replace("_", "__") };
+            var chosen = configuration;
+            item.Click += (_, _) => Vm.RunProject(project!, chosen);
+            run.Items.Add(item);
+        }
+    }
+
     private void OnCtxOpenWithClaudeClick(object? sender, RoutedEventArgs e)
     {
         var slnPath = Vm.Solution.SolutionPath;
@@ -189,6 +253,21 @@ public partial class MainWindow : Window
         var isFolder = ctx is TreeNode { Kind: NodeKind.Folder };
         try { Vm.Shell.RevealInExplorer(target, isFolder); }
         catch (Exception ex) { Vm.Status = $"Open in Explorer failed: {ex.Message}"; }
+    }
+
+    // async void like its siblings: the shell call blocks for the entire life of any dialog Windows raises
+    // (the "how do you want to open this?" picker), so it must run off the UI thread or the window freezes
+    // behind the picker. The window handle owns that picker, so it centres on and draws in front of MiniIDE.
+    private async void OnCtxOpenExternallyClick(object? sender, RoutedEventArgs e)
+    {
+        var target = GetTargetPath((sender as MenuItem)?.DataContext);
+        if (target is null) return;
+        // Everything the background thread touches is resolved HERE, on the UI thread: `Vm` reads DataContext
+        // and TryGetPlatformHandle reads the window, both of which throw "a different thread owns it" off-thread.
+        var shell = Vm.Shell;
+        var owner = TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+        try { await Task.Run(() => shell.OpenWithRegisteredApp(target, owner)); }
+        catch (Exception ex) { Vm.Status = $"Open in external app failed: {ex.Message}"; }
     }
 
     private async void OnCtxCopyAbsolutePathClick(object? sender, RoutedEventArgs e)
@@ -498,16 +577,6 @@ public partial class MainWindow : Window
             FindBox.Focus();
             FindBox.SelectAll();
         }, DispatcherPriority.Background);
-    }
-
-    // Output tabs have no backing file, so the path actions (Open in Explorer / Copy path) are inert on them.
-    // Disable every item when the tab under the menu has no FilePath; GetTargetPath returns null in that case.
-    private void OnTabHeaderCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
-    {
-        if (sender is not ContextMenu cm) return;
-        var hasPath = GetTargetPath(cm.DataContext) is not null;
-        foreach (var item in cm.Items)
-            if (item is MenuItem mi) mi.IsEnabled = hasPath;
     }
 
     private async Task OpenSolutionDialogAsync()

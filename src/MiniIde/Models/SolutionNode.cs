@@ -17,4 +17,12 @@ public class TreeNode
 
     public string IconGlyph => FileIconMap.From(this).Glyph;
     public IBrush IconColor => FileIconMap.From(this).Color;
+
+    /// <summary>Whether this node is a project — the only kind the tree offers a Run menu on. Files and
+    /// folders are not runnable things, and the solution root has its own separate context menu.</summary>
+    public bool IsProject => Kind == NodeKind.Project;
+
+    /// <summary>Whether this node can be handed to the app Windows registered for it. Folders are excluded:
+    /// shell-executing a folder only opens Explorer, duplicating the "Open in Explorer" action beside it.</summary>
+    public bool CanOpenExternally => Path is not null && Kind != NodeKind.Folder;
 }

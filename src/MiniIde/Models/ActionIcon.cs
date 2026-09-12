@@ -5,7 +5,7 @@ namespace MiniIde.Models;
 // C# \uXXXX only reaches U+FFFF; \U000FXXXX is required to encode these.
 // If MDI is bumped, re-verify every codepoint against the new release's cheatsheet.html.
 //
-// Menu-action glyphs (Reload / Claude / Explorer). Kept separate from FileIcon,
+// Menu-action glyphs (Reload / Claude / Explorer / external open). Kept separate from FileIcon,
 // which is scoped to file-type tree glyphs — action glyphs don't belong there.
 //
 // ── Added or changed a glyph below? Re-run the subset script: ─────────────────
@@ -15,7 +15,11 @@ namespace MiniIde.Models;
 // new icon renders as a blank box — the MiniIde.Tests coverage test fails loudly if you do.
 public static class ActionIcon
 {
-    public const string Reload   = "\U000F0450"; // refresh
-    public const string Claude   = "\U000F06A9"; // robot
-    public const string Explorer = "\U000F024B"; // folder
+    public const string Reload       = "\U000F0450"; // refresh
+    public const string Claude       = "\U000F06A9"; // robot
+    public const string Explorer     = "\U000F024B"; // folder
+    public const string OpenExternal = "\U000F03CC"; // open-in-new
+    public const string Run          = "\U000F040A"; // play
+    public const string GitPull      = "\U000F0045"; // arrow-down
+    public const string GitPush      = "\U000F005D"; // arrow-up
 }

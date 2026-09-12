@@ -49,3 +49,20 @@ In `MainWindow.axaml`, on the header `StackPanel` inside the file-area `TabContr
 - [ ] Left-click various tabs — selection still switches normally. Right-click a tab header — the Open in Explorer / Copy path context menu still appears.
 - [ ] Run a project to create a live `<project> - Output` tab, then middle-click its header while it's still running — the tab closes and the process stops (parity with closing via ✕).
 - [ ] Middle-click within the bottom Find/NuGet/Problems/Disk tab strip — nothing closes.
+
+## Learnings
+
+### Architectural decisions
+- **Open Decision #1 resolved to the `ItemTemplate`-level handler** (the ticket's default). `PointerPressed="OnTabHeaderPointerPressed"` sits on the header `StackPanel`, so the tab is already the `DataContext` — no hit-testing, no ctor wiring, and it sits right next to the ✕ `Button` it parallels.
+- **Bubbling, not tunneling.** Every other pointer handler in `MainWindow.axaml.cs` (`OnTreePointerPressed`, `OnBottomTabsPointerPressed`, the NuGet lists) is registered `RoutingStrategies.Tunnel` specifically *because* it must not set `e.Handled` — those handlers augment a press that still has to commit selection. This one is the opposite case: it *wants* to consume the press, but only for the middle button. A plain XAML-attached (bubbling) handler is the right shape, and the early `return` before `e.Handled = true` is what keeps left-click selection and the right-click `ContextMenu` intact.
+- **Open Decision #2 resolved to `sender as Visual`** — narrowed to `sender is not Control c` so the same cast serves both `GetCurrentPoint` and the `DataContext` read.
+
+### Interesting tidbits
+- Avalonia surfaces the middle button *only* as `PointerUpdateKind.MiddleButtonPressed` on a `PointerPressed` event — there is no `Click`/`Tapped`/`MiddleTapped` equivalent, and `PointerPointProperties` has no `IsMiddleButtonPressed`-style flag worth reading here (`PointerUpdateKind` names the button that changed, which is exactly the question being asked).
+- The header template spans only the ✕ + title content, not the `TabItem`'s outer padding, so the middle-click target is the visible tab content. In practice that is the whole tab as users perceive it.
+
+### Verification note (testing an IDE with itself)
+Running MiniIde's own solution *from* MiniIde fails to build: the running `MiniIde.exe` locks `bin/Debug/net10.0/win-x64/MiniIde.dll`, so `dotnet run` can't copy over it. To exercise the live-output-tab path, copy the whole `win-x64` output directory somewhere else and launch *that* copy — `bin/Debug` is then free for the child build. Confirmed end-to-end: middle-clicking a `MiniIde [Debug] - Output` tab while it read "Running" removed the tab and took the child `MiniIde.exe` **and** both `dotnet` processes with it, identical to the ✕ button (same `CloseCommand` instance, so no divergence is possible by construction).
+
+### Rejected alternatives
+- **Tunnel handler on the `TabControl` + hit-test to the `TabItem`** — the other half of Open Decision #1. Rejected: it re-derives a `DataContext` the template already hands us, and a tunnel handler that sets `e.Handled` would be a lone exception to the "tunnel ⇒ never handle" rule the other four pointer handlers follow.

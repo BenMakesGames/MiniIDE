@@ -33,6 +33,12 @@ public partial class MainWindowViewModel : ViewModelBase
     public ObservableCollection<TabViewModelBase> Tabs { get; } = new();
     public ObservableCollection<ProjectEntry> Projects { get; } = new();
 
+    /// <summary>The Run flyout's two groups. Both are rebuilt only when their <em>inputs</em> change (a
+    /// solution load, a different startup project); picking a row mutates the rows' <see cref="RunChoice.IsSelected"/>
+    /// instead, so the collections stay stable while the flyout is open.</summary>
+    public ObservableCollection<RunChoice> Configurations { get; } = new();
+    public ObservableCollection<RunChoice> LaunchProfiles { get; } = new();
+
     [ObservableProperty] private TabViewModelBase? _activeTab;
     [ObservableProperty] private string _status = "Ready";
     [ObservableProperty] private ProjectEntry? _startupProject;
@@ -99,6 +105,7 @@ public partial class MainWindowViewModel : ViewModelBase
             // (Re)point the OS change feed at this solution — this is also the restart on "Reload solution"
             // and on opening a different solution. If it can't start, the workspace reconcile keeps polling.
             Workspace.DiskIsWatched = Watcher.Start(path);
+            RefreshGitState();
             Status = $"Loaded {Path.GetFileName(path)} ({Solution.Projects.Count} projects)";
         }
         catch (Exception ex) { Status = ex.Message; }
@@ -116,9 +123,16 @@ public partial class MainWindowViewModel : ViewModelBase
         Projects.Clear();
         foreach (var e in Solution.Projects) Projects.Add(e);
         NuGetVm.SetProjects(Solution.Projects);
+        // Re-resolved by name for the same reason the startup project is re-resolved by path, with sharper
+        // teeth: `dotnet run -c <gone>` doesn't fail, it quietly builds a DEBUG-less binary into a bin folder
+        // of that name. So a configuration whose name has disappeared falls back rather than being carried.
+        SelectedConfiguration = PickConfiguration(SelectedConfiguration);
         StartupProject = Projects.FirstOrDefault(p =>
                              string.Equals(p.Path, previousStartup, StringComparison.OrdinalIgnoreCase))
                          ?? PickDefaultStartup(Solution.Projects);
+        // Unconditional, because a reload that leaves the startup project unchanged raises no
+        // OnStartupProjectChanged and would otherwise keep the previous solution's configurations.
+        RefreshRunOptions();
     }
 
     private static ProjectEntry? PickDefaultStartup(IReadOnlyList<ProjectEntry> projects)
@@ -162,45 +176,341 @@ public partial class MainWindowViewModel : ViewModelBase
     // gone under the read-only law, nothing here awaits.
     private Task CloseTabAsync(TabViewModelBase tab)
     {
-        // Closing the tab that owns the live run silently stops its process (no confirmation dialog yet).
-        if (ReferenceEquals(_liveRunTab, tab) && Run.IsRunning) { Run.Stop(); _liveRunTab = null; }
+        // A closing output tab takes its own run down with it (no confirmation dialog yet). Nothing consults
+        // shared state, so every other live run keeps going.
+        (tab as OutputTabViewModel)?.StopRun();
         // No save-on-close: the editor is a read-only window onto disk, so a closing tab has nothing to persist.
         Tabs.Remove(tab);
         if (ActiveTab == tab) ActiveTab = Tabs.Count > 0 ? Tabs[0] : null;
         return Task.CompletedTask;
     }
 
-    /// <summary>The output tab that owns the currently-live <see cref="RunService"/> process. Cleared only when
-    /// the finalizing run still owns it — under single-run, starting run B kills run A, so A's continuation runs
-    /// after B has become the live tab; A must not clear B's tracking (see the ticket's kill-race gotcha).</summary>
-    private OutputTabViewModel? _liveRunTab;
+    /// <summary>Kills every run still going. Wired to the window's <c>Closed</c>: run children are started with
+    /// <c>UseShellExecute = false</c> / <c>CreateNoWindow</c>, so Windows does not reap them with us and each
+    /// live run would otherwise outlive the IDE as an orphan.</summary>
+    public void StopAllRuns()
+    {
+        foreach (var tab in Tabs.OfType<OutputTabViewModel>()) tab.StopRun();
+    }
+
+    /// <summary>How many runs this session has started per project <em>and</em> selection, keyed by normalized
+    /// path plus configuration and profile — the same things the header names, so the numbering groups exactly
+    /// as the labels read. Monotonic: a number is never handed out twice, so closing "(2)" doesn't make the
+    /// next run reuse that label and a header always names the same run it did a minute ago.</summary>
+    private readonly Dictionary<string, int> _runsStarted = new(StringComparer.Ordinal);
+
+    /// <summary>Allocates the identity and header for one fresh run tab. The id stays in the <c>run:</c>
+    /// namespace <see cref="TabViewModelBase.TabId"/> documents, made unique per invocation; the header is
+    /// plain for a project's first run under a selection and numbered from its second on.</summary>
+    private (string TabId, string Header) NextRunTab(string projectPath, string label, RunSelection selection)
+    {
+        var key = $"{Path.GetFullPath(projectPath).ToLowerInvariant()}|{selection.Configuration}|{selection.LaunchProfile}";
+        var n = _runsStarted[key] = _runsStarted.GetValueOrDefault(key) + 1;
+        return ($"run:{key}#{n}", n == 1 ? $"{label} - Output" : $"{label} - Output ({n})");
+    }
 
     private bool CanPlay() => StartupProject?.IsRunnable == true;
 
+    /// <summary>Runs the startup project under the header's current selection. Nothing here is gated on a run
+    /// already being live: repeat presses are meant to launch concurrent instances, each in its own tab.</summary>
     [RelayCommand(CanExecute = nameof(CanPlay))]
-    public async Task PlayAsync()
+    public void Play()
     {
-        if (StartupProject is null) { Status = "No startup project"; return; }
-        var name = Path.GetFileNameWithoutExtension(StartupProject.Path);
-        var tab = GetOrCreateOutputTab("run:" + Path.GetFullPath(StartupProject.Path).ToLowerInvariant(), $"{name} - Output");
-        tab.Clear();
-        ActiveTab = tab;
-        _liveRunTab = tab;
-        Status = StartupProject.Kind == ProjectKind.Tst ? $"Testing {name}..." : $"Running {name}...";
-        try { await Run.RunAsync(StartupProject, tab.Append); Status = "Run finished"; }
-        catch (Exception ex) { Status = ex.Message; }
-        finally { if (ReferenceEquals(_liveRunTab, tab)) _liveRunTab = null; }
+        if (StartupProject is not { } project) { Status = "No startup project"; return; }
+        StartRun(project, SelectionFor(project, SelectedConfiguration, SelectedLaunchProfile));
     }
 
-    [RelayCommand(CanExecute = nameof(CanPlay))]
-    public void Stop() { Run.Stop(); Status = "Stopped"; }
+    /// <summary>Runs <paramref name="project"/> under <paramref name="configuration"/> — the solution tree's
+    /// right-click Run. Deliberately writes none of the header's selections: the tree is a way to run something
+    /// once, not a way to re-point the F5 target.</summary>
+    /// <param name="configuration">A name <see cref="SolutionService.Configurations"/> declares. An unknown one
+    /// does not fail — <c>dotnet run -c &lt;unknown&gt;</c> quietly builds a DEBUG-less binary — so callers must
+    /// offer only what the solution has.</param>
+    public void RunProject(ProjectEntry project, string configuration)
+    {
+        // The header's launch profile belongs to the startup project: it was read from that project's
+        // launchSettings.json, and naming a profile another project doesn't declare is a hard `dotnet run`
+        // error. So it carries only when the tree row *is* the startup project — which is exactly the case
+        // where "same as the Run button" has to mean the same process arguments too.
+        var profile = project == StartupProject ? SelectedLaunchProfile : null;
+        StartRun(project, SelectionFor(project, configuration, profile));
+    }
+
+    // A test project runs under `dotnet test`, which has no --launch-profile at all. Dropping the profile in
+    // this one place keeps it authoritative rather than trusting each entry point to have offered none.
+    private static RunSelection SelectionFor(ProjectEntry project, string configuration, string? launchProfile) =>
+        new(configuration, project.Kind == ProjectKind.Tst ? null : launchProfile);
+
+    /// <summary>Opens a brand-new tab that owns its own process and launches the run into it, so repeat runs
+    /// are concurrent instances rather than replacements. The tab keeps the project and selection it was born
+    /// with, which is what lets its own Run button restart the same thing after it exits.</summary>
+    private void StartRun(ProjectEntry project, RunSelection selection)
+    {
+        var name = Path.GetFileNameWithoutExtension(project.Path);
+        var label = $"{name} [{Describe(selection)}]";
+        var (tabId, header) = NextRunTab(project.Path, label, selection);
+        var tab = new OutputTabViewModel(tabId, header, t => Launch(project, selection, t, label));
+        tab.RequestClose += CloseTabAsync;
+        Tabs.Add(tab);
+        ActiveTab = tab;
+        Launch(project, selection, tab, label);
+    }
+
+    /// <summary>Starts one process into <paramref name="tab"/> and returns as soon as it is launched — the
+    /// waiting is done by a detached continuation. Nothing that starts a run may stay busy for the run's
+    /// lifetime: an async command that awaited the process would sit disabled until it exited, which is the
+    /// one thing a second, concurrent run needs the Run button not to do.</summary>
+    private void Launch(ProjectEntry project, RunSelection selection, OutputTabViewModel tab, string label)
+    {
+        // The status bar is last-write-wins and concurrent runs share it, so every run message names its
+        // project and selection — whichever one wins is at least attributable.
+        Status = project.Kind == ProjectKind.Tst ? $"Testing {label}..." : $"Running {label}...";
+        try
+        {
+            var session = Run.Start(project, selection, tab.Append);
+            tab.AttachRun(session);
+            _ = ReportExitAsync(session, label);
+        }
+        catch (Exception ex) { Status = $"{label}: {ex.Message}"; }
+    }
+
+    // Started from the UI thread, so the continuation resumes there (Avalonia installs a SynchronizationContext)
+    // and Status is written on the thread its bindings expect.
+    private async Task ReportExitAsync(RunSession session, string label)
+    {
+        try
+        {
+            await session.Completion;
+            Status = $"{label} finished";
+        }
+        catch (Exception ex) { Status = $"{label}: {ex.Message}"; }
+    }
 
     partial void OnStartupProjectChanged(ProjectEntry? value)
     {
         PlayCommand.NotifyCanExecuteChanged();
-        StopCommand.NotifyCanExecuteChanged();
+        RefreshRunOptions();
     }
 
+    // ── Run selection ─────────────────────────────────────────────────────────────────────────────────
+    //
+    // Two independent axes, never one merged list: a configuration decides what is compiled (`-c`), a profile
+    // decides what environment it launches into (`-lp`). Both are session-only — there is no settings store
+    // anywhere in the app, and the startup project is likewise only preserved across in-session reloads.
+
+    private const string DefaultConfiguration = "Debug";
+
+    /// <summary>Label for the profile row that means "pass no <c>-lp</c> at all", which is where every session
+    /// starts and the only way back once a profile has been picked.</summary>
+    private const string NoProfileLabel = "(dotnet default)";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunLabel))]
+    private string _selectedConfiguration = DefaultConfiguration;
+
+    [ObservableProperty] private string? _selectedLaunchProfile;
+
+    /// <summary>Whether the flyout has a profile group to show. False for a project with no launch settings and
+    /// for every test project, since <c>dotnet test</c> takes no profile.</summary>
+    [ObservableProperty] private bool _hasLaunchProfiles;
+
+    /// <summary>The split button's primary label. It names the configuration so a Release run is not
+    /// indistinguishable from a Debug one before it starts; the profile stays in the flyout, where the
+    /// button's width isn't at stake.</summary>
+    public string RunLabel => $"▶ Run ({SelectedConfiguration})";
+
+    [RelayCommand]
+    private void SelectConfiguration(string? configuration)
+    {
+        if (configuration is not null) SelectedConfiguration = configuration;
+    }
+
+    [RelayCommand]
+    private void SelectLaunchProfile(string? profile) => SelectedLaunchProfile = profile;
+
+    partial void OnSelectedConfigurationChanged(string value) => SyncRunOptionSelection();
+    partial void OnSelectedLaunchProfileChanged(string? value) => SyncRunOptionSelection();
+
+    /// <summary>Re-resolves what the flyout can offer and rebuilds both groups. Called after a solution load
+    /// and whenever the startup project changes, because those two events own the inputs: the solution owns
+    /// the configurations, the startup project owns the profiles.</summary>
+    private void RefreshRunOptions()
+    {
+        var profiles = StartupProject is { Kind: not ProjectKind.Tst } project
+            ? LaunchProfileReader.Read(project.Path)
+            : Array.Empty<string>();
+
+        // Passing a profile the project doesn't have is a hard error (unlike an unknown configuration, which
+        // fails silently), so a carried-over name is dropped rather than risked.
+        if (SelectedLaunchProfile is { } selected && !profiles.Contains(selected, StringComparer.Ordinal))
+            SelectedLaunchProfile = null;
+
+        Configurations.Clear();
+        foreach (var configuration in Solution.Configurations)
+            Configurations.Add(new RunChoice(configuration, configuration, SelectConfigurationCommand,
+                string.Equals(configuration, SelectedConfiguration, StringComparison.OrdinalIgnoreCase)));
+
+        LaunchProfiles.Clear();
+        if (profiles.Count > 0)
+        {
+            LaunchProfiles.Add(new RunChoice(NoProfileLabel, null, SelectLaunchProfileCommand, SelectedLaunchProfile is null));
+            foreach (var profile in profiles)
+                LaunchProfiles.Add(new RunChoice(profile, profile, SelectLaunchProfileCommand,
+                    string.Equals(profile, SelectedLaunchProfile, StringComparison.Ordinal)));
+        }
+        HasLaunchProfiles = LaunchProfiles.Count > 0;
+    }
+
+    /// <summary>Moves the radio marks to the current selections without touching either collection — see
+    /// <see cref="RunChoice.IsSelected"/> for why the rows are updated rather than rebuilt.</summary>
+    private void SyncRunOptionSelection()
+    {
+        foreach (var choice in Configurations)
+            choice.IsSelected = string.Equals(choice.Value, SelectedConfiguration, StringComparison.OrdinalIgnoreCase);
+        foreach (var choice in LaunchProfiles)
+            choice.IsSelected = string.Equals(choice.Value, SelectedLaunchProfile, StringComparison.Ordinal);
+    }
+
+    /// <summary>The configuration to select given <paramref name="preferred"/>: itself when the solution still
+    /// declares it, otherwise <c>Debug</c>, otherwise whatever the solution does declare. Never returns a name
+    /// the solution doesn't have — that is the whole point.</summary>
+    private string PickConfiguration(string? preferred)
+    {
+        var configurations = Solution.Configurations;
+        foreach (var c in configurations)
+            if (string.Equals(c, preferred, StringComparison.OrdinalIgnoreCase)) return c;
+        foreach (var c in configurations)
+            if (string.Equals(c, DefaultConfiguration, StringComparison.OrdinalIgnoreCase)) return c;
+        return configurations.Count > 0 ? configurations[0] : DefaultConfiguration;
+    }
+
+    /// <summary>How a selection reads in a tab header and a status message. One helper so the two can't
+    /// drift.</summary>
+    private static string Describe(RunSelection selection) =>
+        selection.LaunchProfile is { } profile
+            ? $"{selection.Configuration}, {profile}"
+            : selection.Configuration;
+
+
+    // ── Git ───────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // Pull, push and init, and nothing else. The bar's whole state is one question — is this solution inside
+    // a repository, and where is its root — and `.git` is pruned out of the disk feed by design, so that
+    // question is POLLED (see RefreshGitState's callers), never signalled. docs/git.md has the reasoning.
+
+    /// <summary>The open solution's own directory, or null when no solution is open. Observable because the
+    /// bar distinguishes "no solution" (a disabled pull/push pair) from "a solution that isn't in a repo"
+    /// (the +Git button), and <see cref="SolutionService.SolutionPath"/> raises nothing.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OffersGitInit), nameof(PullTip), nameof(PushTip))]
+    [NotifyCanExecuteChangedFor(nameof(GitInitCommand))]
+    private string? _solutionDirectory;
+
+    /// <summary>The repository root the git commands run in — the nearest ancestor of the solution directory
+    /// holding a <c>.git</c>, or null when there is none (or no solution). Not the solution directory: a
+    /// solution in <c>&lt;repo&gt;/src</c> must pull the outer repository, not create a nested one.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OffersGitInit), nameof(PullTip), nameof(PushTip))]
+    [NotifyCanExecuteChangedFor(nameof(GitPullCommand), nameof(GitPushCommand), nameof(GitInitCommand))]
+    private string? _repositoryRoot;
+
+    /// <summary>Whether a git operation is in flight. All three commands share it, so a pull can't be raced
+    /// by a push into the same tab.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PullTip), nameof(PushTip), nameof(InitTip))]
+    [NotifyCanExecuteChangedFor(nameof(GitPullCommand), nameof(GitPushCommand), nameof(GitInitCommand))]
+    private bool _isGitBusy;
+
+    /// <summary>Whether the bar shows <b>+Git</b> instead of the pull/push pair. True only when a solution is
+    /// open <em>and</em> it is not in a repository — which is what makes the no-solution case fall through to
+    /// a disabled pair rather than offering to initialize a repository nowhere.</summary>
+    public bool OffersGitInit => SolutionDirectory is not null && RepositoryRoot is null;
+
+    public string PullTip => GitTip("Pull from the remote (git pull)");
+    public string PushTip => GitTip("Push to the remote (git push)");
+    public string InitTip => IsGitBusy ? GitBusyReason : "Create a git repository here (git init)";
+
+    private const string GitBusyReason = "A git operation is already running";
+
+    // Why pull/push are greyed out, when they are — a disabled button with no reason on it is a dead control.
+    private string GitTip(string enabledText) =>
+        IsGitBusy ? GitBusyReason
+        : SolutionDirectory is null ? "Open a solution to use git"
+        : RepositoryRoot is null ? "This solution is not in a git repository"
+        : enabledText;
+
+    private bool CanRunGitOnRepository => RepositoryRoot is not null && !IsGitBusy;
+    private bool CanGitInit => SolutionDirectory is not null && RepositoryRoot is null && !IsGitBusy;
+
+    [RelayCommand(CanExecute = nameof(CanRunGitOnRepository))]
+    private Task GitPullAsync() => RunGitAsync(RepositoryRoot, "pull");
+
+    [RelayCommand(CanExecute = nameof(CanRunGitOnRepository))]
+    private Task GitPushAsync() => RunGitAsync(RepositoryRoot, "push");
+
+    /// <summary>Initializes a repository in the <em>solution</em> directory. Safe to target that rather than
+    /// an ancestor because the button is only offered when no ancestor is a repository — so there is no way
+    /// to nest one by accident.</summary>
+    [RelayCommand(CanExecute = nameof(CanGitInit))]
+    private async Task GitInitAsync()
+    {
+        // Only a clean exit means a repository now exists; a failed init must leave +Git on the bar.
+        if (await RunGitAsync(SolutionDirectory, "init") == 0) RefreshGitState();
+    }
+
+    /// <summary>Recomputes the repository state from disk. Called from the three moments that can change it:
+    /// a solution opening, the window being activated (<see cref="RefreshFromDiskAsync"/>, which is what
+    /// picks up a repository created or deleted outside the IDE), and our own successful <c>git init</c>.
+    /// Deliberately not wired to <see cref="Watcher"/> — <c>.git</c> is pruned, so it produces no signal to
+    /// wire to.</summary>
+    private void RefreshGitState()
+    {
+        SolutionDirectory = Solution.SolutionPath is { } path ? Path.GetDirectoryName(path) : null;
+        RepositoryRoot = GitService.FindRepositoryRoot(SolutionDirectory);
+    }
+
+    /// <summary>Gets-or-creates the one shared <c>Git - Output</c> tab and activates it. Same shape as
+    /// <see cref="ResolveNuGetOutput"/>, including passing no starter: that leaves <c>HasRun</c> false, so
+    /// the tab shows no run strip.</summary>
+    private OutputTabViewModel ResolveGitOutput()
+    {
+        var tab = GetOrCreateOutputTab("git:", "Git - Output");
+        ActiveTab = tab;
+        return tab;
+    }
+
+    /// <summary>The one path all three commands funnel through: activate the tab, echo the command, run it,
+    /// report the outcome. Returns the exit code, or null when git could not be launched at all.
+    ///
+    /// <para>The buffer is appended to, never cleared — the Git tab is a transcript of the session's git
+    /// activity, and each entry is legible because its own command line sits above it.</para></summary>
+    private async Task<int?> RunGitAsync(string? workingDirectory, params string[] arguments)
+    {
+        if (workingDirectory is null) { Status = "No solution open"; return null; }
+
+        var tab = ResolveGitOutput();
+        var command = $"git {string.Join(' ', arguments)}";
+        // A blank line before every echo but the first, so consecutive transcripts don't run together.
+        if (tab.Document.TextLength > 0) tab.Append("");
+        tab.Append($"> {command}");
+
+        IsGitBusy = true;
+        try
+        {
+            var exit = await GitService.RunAsync(workingDirectory, arguments, tab.Append);
+            Status = exit == 0 ? $"{command} finished" : $"{command} failed (exit {exit})";
+            return exit;
+        }
+        catch (Exception ex)
+        {
+            // Overwhelmingly: git isn't on PATH. Report it and stay usable rather than throwing out of a command.
+            Status = $"{command}: {ex.Message}";
+            tab.Append($"[{ex.Message}]");
+            return null;
+        }
+        // In a finally so a throw can't leave all three buttons permanently dead.
+        finally { IsGitBusy = false; }
+    }
     // ── Semantic queries ──────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Brings the Roslyn workspace up to date with the authoritative disk before a semantic query:
@@ -291,6 +601,10 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         try
         {
+            // First, and cheap: `.git` is pruned out of the watcher, so a repository created or deleted
+            // outside the IDE can only ever be learned about here. Ahead of the awaits so a failing
+            // reconcile can't swallow it.
+            RefreshGitState();
             foreach (var tab in Tabs.OfType<EditorTabViewModel>()) tab.IsStale = true;
             Workspace.RequestFullRescan();
             if (ActiveTab is EditorTabViewModel active) await active.RevalidateFromDiskAsync();

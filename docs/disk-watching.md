@@ -14,6 +14,8 @@ consumer.
   alongside LastWrite so a same-mtime resize still reports.
 - **No subtree exclusion exists.** `Filters` only includes name patterns. Prune `IdeDirectories` yourself by
   walking the relative path's segments, or a build writing `obj/` is a reconcile storm.
+- Pruning is by *segment*, so the `.git` node itself is pruned too, not just its contents — no repo
+  creation or deletion can ever reach a consumer. See `git.md` for the polled state that replaces it.
 - Events arrive on **threadpool** threads. Marshal UI-thread mutations; don't throw out of a handler.
 - A rename raises one `Renamed` carrying **both** `OldFullPath` and `FullPath` — record both.
 - `Timer.Change` after `Dispose` throws `ObjectDisposedException` — a debounce timer must swallow that race.

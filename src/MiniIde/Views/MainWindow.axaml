@@ -15,40 +15,68 @@
     <Grid RowDefinitions="Auto,Auto,*">
         <Border Grid.Row="1" Background="#1E1E22" BorderThickness="0,0,0,1" BorderBrush="#40808080">
             <Grid Margin="8,4" ColumnDefinitions="Auto,*,Auto">
-                <TextBlock Grid.Column="0" Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18" Background="Transparent" DoubleTapped="OnSolutionNameDoubleTapped">
-                    <TextBlock.ContextMenu>
-                        <ContextMenu Opening="OnSolutionCtxOpening">
-                            <ContextMenu.Styles>
-                                <!-- An explicit Foreground on the icon TextBlock overrides the theme's
-                                     disabled-state dimming, so the glyph stays bright while the item's
-                                     text greys out. Dim the whole item to keep icon + text in sync. -->
-                                <Style Selector="MenuItem:disabled">
-                                    <Setter Property="Opacity" Value="0.4"/>
-                                </Style>
-                            </ContextMenu.Styles>
-                            <MenuItem Name="SolutionCtxOpenNew" Header="_Open solution..." Click="OnOpenSolutionClick"/>
-                            <MenuItem Header="_Reload solution" Click="OnReloadSolutionClick">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="{x:Static m:ActionIcon.Reload}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#3FB950" VerticalAlignment="Center"/>
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <Separator/>
-                            <MenuItem Header="Open in _Claude Code" Click="OnCtxOpenWithClaudeClick">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="{x:Static m:ActionIcon.Claude}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <Separator/>
-                            <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
-                            <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
-                        </ContextMenu>
-                    </TextBlock.ContextMenu>
-                </TextBlock>
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <TextBlock Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18" Background="Transparent" DoubleTapped="OnSolutionNameDoubleTapped">
+                        <TextBlock.ContextMenu>
+                            <ContextMenu Opening="OnSolutionCtxOpening">
+                                <ContextMenu.Styles>
+                                    <!-- An explicit Foreground on the icon TextBlock overrides the theme's
+                                         disabled-state dimming, so the glyph stays bright while the item's
+                                         text greys out. Dim the whole item to keep icon + text in sync. -->
+                                    <Style Selector="MenuItem:disabled">
+                                        <Setter Property="Opacity" Value="0.4"/>
+                                    </Style>
+                                </ContextMenu.Styles>
+                                <MenuItem Name="SolutionCtxOpenNew" Header="_Open solution..." Click="OnOpenSolutionClick"/>
+                                <MenuItem Header="_Reload solution" Click="OnReloadSolutionClick">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="{x:Static m:ActionIcon.Reload}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#3FB950" VerticalAlignment="Center"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <Separator/>
+                                <MenuItem Header="Open in _Claude Code" Click="OnCtxOpenWithClaudeClick">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="{x:Static m:ActionIcon.Claude}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <Separator/>
+                                <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
+                                <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
+                            </ContextMenu>
+                        </TextBlock.ContextMenu>
+                    </TextBlock>
+                    <!-- Pull/push and +Git are one slot in two states, never both: a solution either is in a
+                         repository (pull/push) or is one `git init` away from being in one (+Git). With no
+                         solution open neither is true, and the pair shows disabled rather than offering to
+                         initialize a repository nowhere — see MainWindowViewModel.OffersGitInit.
+                         Deliberately subordinate to the solution name: flat, transparent, glyph-only. -->
+                    <StackPanel Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center"
+                                IsVisible="{Binding !OffersGitInit}">
+                        <Button Padding="8,2" MinHeight="0" Background="Transparent"
+                                Command="{Binding GitPullCommand}"
+                                ToolTip.Tip="{Binding PullTip}">
+                            <!-- No explicit Foreground: one would override the theme's disabled-state dimming
+                                 and leave the glyph bright on a greyed-out button (same trap the solution
+                                 context menu documents). -->
+                            <TextBlock Text="{x:Static m:ActionIcon.GitPull}" FontFamily="{StaticResource IconFont}" FontSize="16"/>
+                        </Button>
+                        <Button Padding="8,2" MinHeight="0" Background="Transparent" Margin="2,0,0,0"
+                                Command="{Binding GitPushCommand}"
+                                ToolTip.Tip="{Binding PushTip}">
+                            <TextBlock Text="{x:Static m:ActionIcon.GitPush}" FontFamily="{StaticResource IconFont}" FontSize="16"/>
+                        </Button>
+                    </StackPanel>
+                    <Button Content="+Git" Padding="8,2" MinHeight="0" Background="Transparent"
+                            Margin="12,0,0,0" VerticalAlignment="Center"
+                            IsVisible="{Binding OffersGitInit}"
+                            Command="{Binding GitInitCommand}"
+                            ToolTip.Tip="{Binding InitTip}"/>
+                </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <ComboBox Width="280"
                               ItemsSource="{Binding Projects}"
@@ -75,8 +103,51 @@
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <Button Content="▶ Run" Margin="8,0,0,0" Command="{Binding PlayCommand}"/>
-                    <Button Content="■ Stop" Margin="4,0,0,0" Command="{Binding StopCommand}"/>
+                    <SplitButton Content="{Binding RunLabel}" Margin="8,0,0,0" Command="{Binding PlayCommand}">
+                        <SplitButton.Flyout>
+                            <!-- A plain Flyout rather than a MenuFlyout: a MenuFlyout would have to carry the
+                                 per-row ToggleType/IsChecked/Command through ItemContainerTheme, whose setter
+                                 bindings resolve against the parent VM instead of the item (Avalonia #18146).
+                                 Hand-laid content binds normally and gives the two groups real headers and a
+                                 separator. It does not light-dismiss on a pick, which suits a two-axis
+                                 selection: both can be set in one visit. -->
+                            <Flyout Placement="BottomEdgeAlignedRight">
+                                <StackPanel MinWidth="180">
+                                    <TextBlock Text="Configuration" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
+                                    <ItemsControl ItemsSource="{Binding Configurations}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate DataType="vm:RunChoice">
+                                                <!-- IsChecked is one-way: the click's own toggle is transient and the
+                                                     command's write back through the VM is what makes it stick. -->
+                                                <RadioButton GroupName="RunConfiguration"
+                                                             Content="{Binding Label}"
+                                                             IsChecked="{Binding IsSelected, Mode=OneWay}"
+                                                             Command="{Binding Select}"
+                                                             CommandParameter="{Binding Value}"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <!-- The whole group vanishes for a project with no launch settings, and for
+                                         every test project: `dotnet test` has no launch-profile option at all. -->
+                                    <StackPanel IsVisible="{Binding HasLaunchProfiles}">
+                                        <Border Height="1" Background="#40808080" Margin="0,8"/>
+                                        <TextBlock Text="Launch profile" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
+                                        <ItemsControl ItemsSource="{Binding LaunchProfiles}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="vm:RunChoice">
+                                                    <RadioButton GroupName="RunLaunchProfile"
+                                                                 Content="{Binding Label}"
+                                                                 IsChecked="{Binding IsSelected, Mode=OneWay}"
+                                                                 Command="{Binding Select}"
+                                                                 CommandParameter="{Binding Value}"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Flyout>
+                        </SplitButton.Flyout>
+                    </SplitButton>
                 </StackPanel>
             </Grid>
         </Border>
@@ -104,9 +175,23 @@
                     </TreeView.ItemContainerTheme>
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate DataType="m:TreeNode" ItemsSource="{Binding Children}">
-                            <StackPanel Orientation="Horizontal" Background="Transparent">
+                            <StackPanel Orientation="Horizontal" Background="Transparent" ContextRequested="OnTreeCtxRequested">
                                 <StackPanel.ContextMenu>
                                     <ContextMenu>
+                                        <ContextMenu.Styles>
+                                            <!-- An explicit Foreground on the icon TextBlock overrides the theme's
+                                                 disabled-state dimming, so the glyph stays bright while the item's
+                                                 text greys out. Dim the whole item to keep icon + text in sync. -->
+                                            <Style Selector="MenuItem:disabled">
+                                                <Setter Property="Opacity" Value="0.4"/>
+                                            </Style>
+                                        </ContextMenu.Styles>
+                                        <MenuItem Header="Open in _external app" Click="OnCtxOpenExternallyClick"
+                                                  IsEnabled="{Binding CanOpenExternally}">
+                                            <MenuItem.Icon>
+                                                <TextBlock Text="{x:Static m:ActionIcon.OpenExternal}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
                                         <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
                                             <MenuItem.Icon>
                                                 <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
@@ -114,6 +199,17 @@
                                         </MenuItem>
                                         <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
                                         <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
+                                        <!-- Project rows only: a .cs file or a folder is not a runnable thing, so
+                                             the divider goes with the item rather than leaving a stray rule at the
+                                             bottom of every file's menu. The submenu's rows are (this project ×
+                                             configuration) pairs — no one binding source has both halves — so they
+                                             are filled in by OnTreeCtxRequested rather than bound here. -->
+                                        <Separator IsVisible="{Binding IsProject}"/>
+                                        <MenuItem Name="TreeCtxRun" Header="_Run" IsVisible="{Binding IsProject}">
+                                            <MenuItem.Icon>
+                                                <TextBlock Text="{x:Static m:ActionIcon.Run}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#6BBF59" VerticalAlignment="Center"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
                                     </ContextMenu>
                                 </StackPanel.ContextMenu>
                                 <TextBlock Text="{Binding IconGlyph}"
@@ -132,23 +228,34 @@
                 <TabControl Grid.Column="2" Background="#1E1E22" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
                     <TabControl.ItemTemplate>
                         <DataTemplate DataType="vm:TabViewModelBase">
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" PointerPressed="OnTabHeaderPointerPressed">
                                 <StackPanel.ContextMenu>
-                                    <!-- Path actions are inert on output tabs (no backing file); OnTabHeaderCtxOpening
-                                         disables every item when the tab has no FilePath. -->
-                                    <ContextMenu Opening="OnTabHeaderCtxOpening">
+                                    <!-- Path actions are inert on output tabs (no backing file), so each item's
+                                         IsEnabled binds to the tab's FilePath. Keep this declarative: ContextMenu.Opening
+                                         is raised before the menu is parented, so a handler there sees a null DataContext
+                                         on a menu's first open and mis-computes enablement (see docs/avalonia.md). -->
+                                    <ContextMenu>
                                         <ContextMenu.Styles>
                                             <Style Selector="MenuItem:disabled">
                                                 <Setter Property="Opacity" Value="0.4"/>
                                             </Style>
                                         </ContextMenu.Styles>
-                                        <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
+                                        <MenuItem Header="Open in _external app" Click="OnCtxOpenExternallyClick"
+                                                  IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                            <MenuItem.Icon>
+                                                <TextBlock Text="{x:Static m:ActionIcon.OpenExternal}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick"
+                                                  IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}">
                                             <MenuItem.Icon>
                                                 <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
                                             </MenuItem.Icon>
                                         </MenuItem>
-                                        <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
-                                        <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
+                                        <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"
+                                                  IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                                        <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"
+                                                  IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}"/>
                                     </ContextMenu>
                                 </StackPanel.ContextMenu>
                                 <Button Content="✕" Margin="0,0,6,0" Padding="4,0" FontSize="10" MinHeight="0" MinWidth="0" Click="OnCloseTabClick" Tag="{Binding}"/>
@@ -184,16 +291,52 @@
                         <!-- Same three handlers as the code template: each binder ignores editors showing the
                              other kind of tab, so the window needs one handler trio, not one per kind. -->
                         <DataTemplate DataType="vm:OutputTabViewModel">
-                            <ae:TextEditor IsReadOnly="True"
-                                           ShowLineNumbers="False"
-                                           WordWrap="False"
-                                           FontFamily="Consolas,monospace"
-                                           FontSize="13"
-                                           Background="#000000"
-                                           Foreground="#DCDCDC"
-                                           AttachedToVisualTree="OnEditorAttached"
-                                           DataContextChanged="OnEditorDataContextChanged"
-                                           DetachedFromVisualTree="OnEditorDetached"/>
+                            <Grid RowDefinitions="Auto,*">
+                                <!-- Stop/Run live here, not in the top bar: each run owns its own process, so the
+                                     only place that can name which one to act on is the tab showing it. Like the
+                                     editor below, this strip is realized once and reused across every output
+                                     tab, so everything it shows must come from the bound tab — hence
+                                     IsVisible on HasRun, which hides it on the NuGet output/metadata tabs. -->
+                                <Border Grid.Row="0"
+                                        IsVisible="{Binding HasRun}"
+                                        Background="#1E1E22"
+                                        BorderThickness="0,0,0,1"
+                                        BorderBrush="#40808080"
+                                        Padding="6,4">
+                                    <StackPanel Orientation="Horizontal">
+                                        <!-- One slot, two states, never both: a live run can only be stopped and an
+                                             exited one can only be restarted, so the pair swaps rather than showing
+                                             a permanently dead button beside the live one. Stop stays on screen
+                                             (disabled) while the kill is in flight — the run isn't restartable yet,
+                                             and swapping to Run there would offer an action that can't be taken. -->
+                                        <Button Content="■ Stop"
+                                                Padding="10,2" MinHeight="0"
+                                                IsVisible="{Binding IsRunLive}"
+                                                Command="{Binding StopRunCommand}"
+                                                ToolTip.Tip="{Binding StopTip}"/>
+                                        <Button Content="▶ Run"
+                                                Padding="10,2" MinHeight="0"
+                                                IsVisible="{Binding !IsRunLive}"
+                                                Command="{Binding RunAgainCommand}"
+                                                ToolTip.Tip="Run this project again, same configuration and profile"/>
+                                        <TextBlock Text="{Binding RunState}"
+                                                   Margin="10,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="#9A9AA0"/>
+                                    </StackPanel>
+                                </Border>
+                                <ae:TextEditor Grid.Row="1"
+                                               IsReadOnly="True"
+                                               ShowLineNumbers="False"
+                                               WordWrap="False"
+                                               FontFamily="Consolas,monospace"
+                                               FontSize="13"
+                                               Background="#000000"
+                                               Foreground="#DCDCDC"
+                                               AttachedToVisualTree="OnEditorAttached"
+                                               DataContextChanged="OnEditorDataContextChanged"
+                                               DetachedFromVisualTree="OnEditorDetached"/>
+                            </Grid>
                         </DataTemplate>
                         <DataTemplate DataType="vm:ImageTabViewModel">
                             <Grid Background="#1E1E22">

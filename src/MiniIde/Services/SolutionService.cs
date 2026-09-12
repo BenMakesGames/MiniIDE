@@ -14,6 +14,12 @@ public class SolutionService
     public string? SolutionPath { get; private set; }
     public IReadOnlyList<ProjectEntry> Projects { get; private set; } = System.Array.Empty<ProjectEntry>();
 
+    /// <summary>The build configurations the loaded solution declares — <c>Debug</c> and <c>Release</c>
+    /// for one that declares none, plus any custom entries a <c>.slnx</c> or a classic <c>.sln</c> adds.
+    /// Empty before any solution is open. Solution-level on purpose: asking each project instead costs an
+    /// MSBuild process launch apiece for an answer the already-open solution model has for free.</summary>
+    public IReadOnlyList<string> Configurations { get; private set; } = System.Array.Empty<string>();
+
     /// <summary>The solution-relative form of an absolute path, anchored on the solution directory.
     /// Returns <paramref name="absolutePath"/> unchanged when no solution is loaded. The solution file
     /// itself yields its bare filename.</summary>
@@ -50,6 +56,7 @@ public class SolutionService
             PopulateProjectFiles(projNode);
             projectNodes.Add(projNode);
         }
+        Configurations = model.BuildTypes.ToArray();
         Projects = entries;
         return projectNodes;
     }

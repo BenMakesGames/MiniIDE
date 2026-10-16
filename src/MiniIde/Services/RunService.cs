@@ -77,6 +77,10 @@ public sealed class RunSession
     /// this with an <see cref="OperationCanceledException"/> instead.</summary>
     public Task Completion { get; }
 
+    /// <summary>The process exit code once it has exited, or null while still live or if the wait was
+    /// cancelled before it exited. Read after <see cref="Completion"/> finishes successfully.</summary>
+    public int? ExitCode { get; private set; }
+
     /// <summary>Kills this run's process tree, and only this one. A no-op once it has exited, so the stop
     /// and shutdown paths can call it unconditionally.</summary>
     public void Stop()
@@ -88,6 +92,7 @@ public sealed class RunSession
     {
         await using var _ = ct.Register(Stop);
         await _process.WaitForExitAsync(ct);
+        ExitCode = _process.ExitCode;
         log($"[exit {_process.ExitCode}]");
     }
 }

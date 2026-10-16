@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Avalonia.Media;
 using Avalonia.Threading;
 using AvaloniaEdit.Document;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -54,9 +55,32 @@ public partial class OutputTabViewModel : DocumentTabViewModel
     /// <summary>Whether this tab's process is still going. Stays true across a stop request until the process
     /// actually exits, which is what keeps Stop — not Run — on screen while it is being killed.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RunState))]
+    [NotifyPropertyChangedFor(nameof(RunState), nameof(IsErrored), nameof(RunGlyph), nameof(RunGlyphBrush))]
     [NotifyCanExecuteChangedFor(nameof(StopRunCommand), nameof(RunAgainCommand))]
     private bool _isRunLive;
+
+    /// <summary>Whether the last completed run exited with a non-zero code AND wasn't user-stopped. Drives the
+    /// red exclamation on the tab header: a user who hit Stop meant to end it, so the resulting non-zero exit
+    /// is expected and the glyph stays a green check; only a run that died on its own with a bad exit code
+    /// earns the red. Reset to false the instant a fresh run is attached.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunGlyph), nameof(RunGlyphBrush))]
+    private bool _isErrored;
+
+    private static readonly IBrush OkBrush = new SolidColorBrush(Color.Parse("#3FB950"));
+    private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.Parse("#F85149"));
+
+    /// <summary>The three-state run indicator shown on the tab header: solid circle while live, check once it
+    /// has exited cleanly (or the user stopped it), exclamation if it self-ended non-zero. Paired with
+    /// <see cref="RunGlyphBrush"/> for color — green for the first two, red for the error.</summary>
+    public string RunGlyph => IsRunLive ? "●" : IsErrored ? "!" : "✓";
+
+    public IBrush RunGlyphBrush => IsErrored ? ErrorBrush : OkBrush;
+
+    // Tracks whether the current (or just-ended) run was killed by the user — latched on StopRun, read in
+    // MarkExitedAsync to decide red vs. hollow-green. Separate from IsStopping, which clears before the exit
+    // is actually observed.
+    private bool _userStopped;
 
     /// <summary>Whether a stop has been asked for and the process has not exited yet. Killing a process tree is
     /// not instantaneous, and during that window neither button is a legal action: the run can't be stopped
@@ -105,6 +129,8 @@ public partial class OutputTabViewModel : DocumentTabViewModel
     {
         _run = run;
         IsStopping = false;
+        IsErrored = false;
+        _userStopped = false;
         IsRunLive = true;
         _ = MarkExitedAsync(run);
     }
@@ -120,6 +146,8 @@ public partial class OutputTabViewModel : DocumentTabViewModel
         // Flipped before the kill, not after it: the button has to grey out on the click that asked for the
         // stop, not on the exit that eventually answers it.
         IsStopping = true;
+        // Latched so MarkExitedAsync won't mark the resulting non-zero exit as an error — a kill is expected.
+        _userStopped = true;
         _run.Stop();
     }
 
@@ -147,6 +175,9 @@ public partial class OutputTabViewModel : DocumentTabViewModel
             if (!ReferenceEquals(_run, run)) return;
             IsStopping = false;
             IsRunLive = false;
+            // Red only for a self-ended run with a non-zero code. A user Stop (which killed the tree) is
+            // expected, so it stays hollow-green. A cancelled wait leaves ExitCode null → also not red.
+            IsErrored = !_userStopped && run.ExitCode is int code && code != 0;
         });
     }
 

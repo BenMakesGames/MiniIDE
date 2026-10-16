@@ -162,46 +162,28 @@
                                                      ToolTip.Tip="{Binding RunTip}"
                                                      ToolTip.ShowOnDisabled="True">
                                             <SplitButton.Flyout>
-                                                <!-- A plain Flyout rather than a MenuFlyout: a MenuFlyout would have to carry the
-                                                     per-row ToggleType/IsChecked/Command through ItemContainerTheme, whose setter
-                                                     bindings resolve against the parent VM instead of the item (Avalonia #18146).
-                                                     Hand-laid content binds normally and gives the two groups real headers and a
-                                                     separator. It does not light-dismiss on a pick, which suits a two-axis
-                                                     selection: both can be set in one visit. -->
+                                                <!-- A plain Flyout rather than a MenuFlyout: MenuFlyout's ItemContainerTheme
+                                                     setter bindings resolve against the parent VM instead of the item
+                                                     (Avalonia #18146), so Header/Command on the generated MenuItems come up
+                                                     empty. Hand-laid content binds normally. The flyout light-dismisses when
+                                                     a row click starts a run and the active tab changes, so no explicit
+                                                     close is needed. -->
                                                 <Flyout Placement="BottomEdgeAlignedLeft">
-                                                    <StackPanel MinWidth="180">
-                                                        <TextBlock Text="Configuration" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
-                                                        <ItemsControl ItemsSource="{Binding Configurations}">
-                                                            <ItemsControl.ItemTemplate>
-                                                                <DataTemplate DataType="vm:RunChoice">
-                                                                    <!-- IsChecked is one-way: the click's own toggle is transient and the
-                                                                         command's write back through the VM is what makes it stick. -->
-                                                                    <RadioButton GroupName="{Binding Group}"
-                                                                                 Content="{Binding Label}"
-                                                                                 IsChecked="{Binding IsSelected, Mode=OneWay}"
-                                                                                 Command="{Binding Select}"
-                                                                                 CommandParameter="{Binding Value}"/>
-                                                                </DataTemplate>
-                                                            </ItemsControl.ItemTemplate>
-                                                        </ItemsControl>
-                                                        <!-- The whole group vanishes for a project with no launch settings, and for
-                                                             every test project: `dotnet test` has no launch-profile option at all. -->
-                                                        <StackPanel IsVisible="{Binding HasLaunchProfiles}">
-                                                            <Border Height="1" Background="#40808080" Margin="0,8"/>
-                                                            <TextBlock Text="Launch profile" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
-                                                            <ItemsControl ItemsSource="{Binding LaunchProfiles}">
-                                                                <ItemsControl.ItemTemplate>
-                                                                    <DataTemplate DataType="vm:RunChoice">
-                                                                        <RadioButton GroupName="{Binding Group}"
-                                                                                     Content="{Binding Label}"
-                                                                                     IsChecked="{Binding IsSelected, Mode=OneWay}"
-                                                                                     Command="{Binding Select}"
-                                                                                     CommandParameter="{Binding Value}"/>
-                                                                    </DataTemplate>
-                                                                </ItemsControl.ItemTemplate>
-                                                            </ItemsControl>
-                                                        </StackPanel>
-                                                    </StackPanel>
+                                                    <ItemsControl ItemsSource="{Binding RunOptions}" MinWidth="180">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate DataType="vm:RunChoice">
+                                                                <!-- One click = one run. No sticky selection to show, so these
+                                                                     are plain buttons rather than radios. -->
+                                                                <Button Content="{Binding Label}"
+                                                                        Command="{Binding Run}"
+                                                                        HorizontalAlignment="Stretch"
+                                                                        HorizontalContentAlignment="Left"
+                                                                        Background="Transparent"
+                                                                        BorderThickness="0"
+                                                                        Padding="8,4"/>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
                                                 </Flyout>
                                             </SplitButton.Flyout>
                                         </SplitButton>
@@ -265,6 +247,17 @@
                                 </ContextMenu>
                             </StackPanel.ContextMenu>
                             <Button Content="✕" Margin="0,0,6,0" Padding="4,0" FontSize="10" MinHeight="0" MinWidth="0" Click="OnCloseTabClick" Tag="{Binding}"/>
+                            <!-- Three-state run indicator: solid green circle while live, green check once it has
+                                 exited cleanly (or the user stopped it), red exclamation if it self-ended non-zero.
+                                 Only shown on tabs that track a process (HasRun), so file/editor tabs — whose
+                                 bindings fail harmlessly through FallbackValue — stay glyph-less. The glyph and
+                                 color are picked by the VM so the three states can't disagree. -->
+                            <TextBlock Margin="0,0,6,0" VerticalAlignment="Center"
+                                       FontWeight="Bold" FontSize="13"
+                                       x:CompileBindings="False"
+                                       IsVisible="{Binding HasRun, FallbackValue=False}"
+                                       Text="{Binding RunGlyph, FallbackValue=''}"
+                                       Foreground="{Binding RunGlyphBrush}"/>
                             <TextBlock Text="{Binding Header}"/>
                         </StackPanel>
                     </DataTemplate>

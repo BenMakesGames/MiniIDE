@@ -5,7 +5,7 @@ using Xunit;
 
 namespace MiniIde.Tests;
 
-/// <summary>The project card's own state: which configuration Run uses, how a reload treats the user's pick,
+/// <summary>The project card's own state: which selection the plain Run button uses, what the dropdown lists,
 /// and when Run is offered at all.</summary>
 public sealed class ProjectItemViewModelTests
 {
@@ -26,51 +26,50 @@ public sealed class ProjectItemViewModelTests
     private static readonly string[] DebugRelease = ["Debug", "Release"];
 
     [Fact]
-    public void DefaultsToDebug_WhateverOrderTheSolutionDeclares()
+    public void PlainRun_UsesDebug_WhateverOrderTheSolutionDeclares()
     {
-        var card = new ProjectItemViewModel(Entry(), ["Release", "Debug"], new RecordingHost());
+        var host = new RecordingHost();
+        var card = new ProjectItemViewModel(Entry(), ["Release", "Debug"], host);
 
-        card.SelectedConfiguration.ShouldBe("Debug");
-        card.Configurations.Single(c => c.IsSelected).Value.ShouldBe("Debug");
+        card.RunCommand.Execute(null);
+
+        var selection = host.Runs.ShouldHaveSingleItem();
+        selection.Configuration.ShouldBe("Debug");
+        selection.LaunchProfile.ShouldBeNull();
     }
 
     [Fact]
-    public void Run_UsesThePickedConfiguration()
+    public void PlainRun_FallsBackToFirstConfiguration_WhenNoDebug()
+    {
+        var host = new RecordingHost();
+        var card = new ProjectItemViewModel(Entry(), ["Staging", "Release"], host);
+
+        card.RunCommand.Execute(null);
+
+        host.Runs.ShouldHaveSingleItem().Configuration.ShouldBe("Staging");
+    }
+
+    [Fact]
+    public void RunOptions_ListEveryConfiguration_WithDefaultMarked()
+    {
+        var card = new ProjectItemViewModel(Entry(), DebugRelease, new RecordingHost());
+
+        // No profiles on disk, so one row per configuration.
+        card.RunOptions.Select(o => o.Label).ShouldBe(["Debug   (default)", "Release"]);
+    }
+
+    [Fact]
+    public void RunOptions_InvokingARow_StartsThatRun()
     {
         var host = new RecordingHost();
         var card = new ProjectItemViewModel(Entry(), DebugRelease, host);
 
-        card.SelectConfigurationCommand.Execute("Release");
-        card.RunCommand.Execute(null);
+        // Release row — the non-default one in a two-config, no-profile project.
+        card.RunOptions.Single(o => o.Label == "Release").Run.Execute(null);
 
-        host.Runs.ShouldHaveSingleItem().Configuration.ShouldBe("Release");
-        card.Configurations.Single(c => c.IsSelected).Value.ShouldBe("Release");
-    }
-
-    [Fact]
-    public void Update_KeepsAPickTheSolutionStillDeclares()
-    {
-        var entry = Entry();
-        var card = new ProjectItemViewModel(entry, DebugRelease, new RecordingHost());
-        card.SelectConfigurationCommand.Execute("Release");
-
-        card.Update(entry, DebugRelease);
-
-        card.SelectedConfiguration.ShouldBe("Release");
-    }
-
-    [Fact]
-    public void Update_FallsBackToDebug_WhenThePickedConfigurationDisappears()
-    {
-        // `dotnet run -c <gone>` doesn't fail — it quietly builds a DEBUG-less binary — so a vanished pick must
-        // not be carried.
-        var entry = Entry();
-        var card = new ProjectItemViewModel(entry, ["Debug", "Release", "Staging"], new RecordingHost());
-        card.SelectConfigurationCommand.Execute("Staging");
-
-        card.Update(entry, DebugRelease);
-
-        card.SelectedConfiguration.ShouldBe("Debug");
+        var selection = host.Runs.ShouldHaveSingleItem();
+        selection.Configuration.ShouldBe("Release");
+        selection.LaunchProfile.ShouldBeNull();
     }
 
     [Fact]
@@ -106,16 +105,5 @@ public sealed class ProjectItemViewModelTests
         card.Update(lib with { Kind = ProjectKind.Exe }, DebugRelease);
 
         card.RunCommand.CanExecute(null).ShouldBeTrue();
-    }
-
-    [Fact]
-    public void RadioGroups_AreUniquePerProject()
-    {
-        // Every card's flyout lives in one window; a shared group name would let one card's pick uncheck
-        // another's.
-        var a = new ProjectItemViewModel(Entry(), DebugRelease, new RecordingHost());
-        var b = new ProjectItemViewModel(Entry(), DebugRelease, new RecordingHost());
-
-        a.Configurations[0].Group.ShouldNotBe(b.Configurations[0].Group);
     }
 }

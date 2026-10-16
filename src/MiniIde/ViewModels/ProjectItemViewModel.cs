@@ -21,18 +21,22 @@ public interface IProjectHost
     void SetStarred(ProjectItemViewModel project, bool starred);
 }
 
-/// <summary>One project card in the left panel: identity, its own Run selection (runnable projects only), and a
-/// button per live run.
+/// <summary>One project card in the left panel: identity, a Run button that always launches the default
+/// selection, a dropdown of every other runnable selection (one click = one run), and a button per live run.
 ///
 /// <para>Cards are long-lived: a reload of the project list updates the card for the same path in place
-/// (<see cref="Update"/>) rather than replacing it, so neither the user's configuration pick nor the run
-/// buttons blink out because a project file was saved.</para></summary>
+/// (<see cref="Update"/>) rather than replacing it, so the run buttons don't blink out because a project
+/// file was saved.</para>
+///
+/// <para>No sticky "last used" selection: the plain Run button always runs the default configuration, and the
+/// dropdown's rows run their own selection instantly. The default row carries a "(default)" suffix so users
+/// can tell which one the plain button would pick.</para></summary>
 public partial class ProjectItemViewModel : ViewModelBase
 {
     private const string DefaultConfiguration = "Debug";
 
-    /// <summary>Label for the profile row that means "pass no <c>-lp</c> at all", which is where every session
-    /// starts and the only way back once a profile has been picked.</summary>
+    /// <summary>Label for the profile slot that means "pass no <c>-lp</c> at all", i.e. let <c>dotnet run</c>
+    /// pick its own default. Used in menu labels alongside the configuration name.</summary>
     private const string NoProfileLabel = "(dotnet default)";
 
     private readonly IProjectHost _host;
@@ -60,11 +64,10 @@ public partial class ProjectItemViewModel : ViewModelBase
     /// (rather than a disabled one) and sorts to the bottom of the list.</summary>
     public bool IsRunnable => Entry.IsRunnable;
 
-    /// <summary>The flyout's two groups. Rebuilt only when their inputs change (a reload); picking a row mutates
-    /// the rows' <see cref="RunChoice.IsSelected"/> instead, so the collections stay stable while the flyout is
-    /// open.</summary>
-    public ObservableCollection<RunChoice> Configurations { get; } = new();
-    public ObservableCollection<RunChoice> LaunchProfiles { get; } = new();
+    /// <summary>Flat list of every runnable selection — the cartesian product of configurations and launch
+    /// profiles — in dropdown order. The default selection carries a "(default)" suffix. Rebuilt on reload;
+    /// never mutated otherwise, so the list is stable while the flyout is open.</summary>
+    public ObservableCollection<RunChoice> RunOptions { get; } = new();
 
     /// <summary>The run tabs whose process is still going, in start order. One button each, beside Run. A run
     /// whose tab was closed stays here — closing a tab never stops its process — so this is how it is reached
@@ -75,30 +78,18 @@ public partial class ProjectItemViewModel : ViewModelBase
     /// still has live runs (it was reclassified mid-run), so those runs stay reachable.</summary>
     public bool ShowsRunRow => IsRunnable || LiveRuns.Count > 0;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RunTip))]
-    private string _selectedConfiguration = DefaultConfiguration;
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RunTip))]
-    private string? _selectedLaunchProfile;
-
-    /// <summary>Whether the flyout has a profile group to show. False for a project with no launch settings and
-    /// for every test project, since <c>dotnet test</c> takes no profile.</summary>
-    [ObservableProperty] private bool _hasLaunchProfiles;
-
     private bool CanRun => Entry.IsRunnable && _solutionConfigurations.Count > 0;
 
-    /// <summary>What Run will do, or why it can't — a disabled button with no reason on it is a dead control.</summary>
+    /// <summary>What the plain Run button will do, or why it can't — a disabled button with no reason on it is
+    /// a dead control.</summary>
     public string RunTip =>
         !Entry.IsRunnable ? $"{Name} isn't a runnable project"
         : _solutionConfigurations.Count == 0 ? "The solution declares no build configurations"
-        : $"{(Entry.Kind == ProjectKind.Tst ? "Test" : "Run")} {Name} ({Describe(CurrentSelection)})";
+        : $"{(Entry.Kind == ProjectKind.Tst ? "Test" : "Run")} {Name} ({Describe(DefaultSelection)})";
 
-    /// <summary>A test project runs under <c>dotnet test</c>, which has no <c>--launch-profile</c> at all.
-    /// Dropping the profile here keeps that authoritative rather than trusting the flyout to have offered none.</summary>
-    private RunSelection CurrentSelection =>
-        new(SelectedConfiguration, Entry.Kind == ProjectKind.Tst ? null : SelectedLaunchProfile);
+    /// <summary>The selection the plain Run button runs: Debug (or the first configuration the solution
+    /// declares, if Debug isn't there) with no launch profile.</summary>
+    private RunSelection DefaultSelection => new(PickDefaultConfiguration(), null);
 
     /// <summary>How a selection reads in a tab header, a run button and a status message. One helper so they
     /// can't drift.</summary>
@@ -108,7 +99,7 @@ public partial class ProjectItemViewModel : ViewModelBase
     /// <summary>Nothing here is gated on a run already being live: repeat presses launch concurrent instances,
     /// each in its own tab.</summary>
     [RelayCommand(CanExecute = nameof(CanRun))]
-    private void Run() => _host.StartRun(this, CurrentSelection);
+    private void Run() => _host.StartRun(this, DefaultSelection);
 
     [RelayCommand]
     private void ShowRun(OutputTabViewModel? tab)
@@ -138,74 +129,46 @@ public partial class ProjectItemViewModel : ViewModelBase
     [RelayCommand]
     private void ToggleStar() => _host.SetStarred(this, !IsStarred);
 
-    [RelayCommand]
-    private void SelectConfiguration(string? configuration)
-    {
-        if (configuration is not null) SelectedConfiguration = configuration;
-    }
-
-    [RelayCommand]
-    private void SelectLaunchProfile(string? profile) => SelectedLaunchProfile = profile;
-
-    partial void OnSelectedConfigurationChanged(string value) => SyncSelection();
-    partial void OnSelectedLaunchProfileChanged(string? value) => SyncSelection();
-
     /// <summary>Points the card at a freshly read <paramref name="entry"/> (same path, possibly a different kind)
-    /// and the solution's current configurations, carrying the user's selections over only where they are still
-    /// valid.</summary>
+    /// and the solution's current configurations, and rebuilds the dropdown rows.</summary>
     public void Update(ProjectEntry entry, IReadOnlyList<string> configurations)
     {
         Entry = entry;
         _solutionConfigurations = configurations;
         RunCommand.NotifyCanExecuteChanged();
 
-        // Re-resolved by name with teeth: `dotnet run -c <gone>` doesn't fail, it quietly builds a DEBUG-less
-        // binary into a bin folder of that name. So a configuration that disappeared falls back to Debug.
-        SelectedConfiguration = PickConfiguration(SelectedConfiguration);
-
         var profiles = entry.Kind == ProjectKind.Tst
             ? Array.Empty<string>()
             : LaunchProfileReader.Read(entry.Path);
-        // Naming a profile the project doesn't have is a hard `dotnet run` error, so a vanished one is dropped.
-        if (SelectedLaunchProfile is { } selected && !profiles.Contains(selected, StringComparer.Ordinal))
-            SelectedLaunchProfile = null;
 
-        var configurationGroup = $"{entry.Path}|configuration";
-        Configurations.Clear();
+        RunOptions.Clear();
+        if (configurations.Count == 0) { OnPropertyChanged(nameof(RunTip)); return; }
+
+        // Profile slots: no-profile is always present (as the only slot for test projects and projects without
+        // launchSettings), followed by every profile the project declares. "No profile" first so each config
+        // leads with its plainest form.
+        var profileSlots = new List<(string? Value, string? LabelPart)> { (null, profiles.Count > 0 ? NoProfileLabel : null) };
+        foreach (var profile in profiles) profileSlots.Add((profile, profile));
+
+        var defaultSelection = DefaultSelection;
         foreach (var configuration in configurations)
-            Configurations.Add(new RunChoice(configuration, configuration, configurationGroup, SelectConfigurationCommand,
-                string.Equals(configuration, SelectedConfiguration, StringComparison.OrdinalIgnoreCase)));
-
-        var profileGroup = $"{entry.Path}|profile";
-        LaunchProfiles.Clear();
-        if (profiles.Count > 0)
         {
-            LaunchProfiles.Add(new RunChoice(NoProfileLabel, null, profileGroup, SelectLaunchProfileCommand, SelectedLaunchProfile is null));
-            foreach (var profile in profiles)
-                LaunchProfiles.Add(new RunChoice(profile, profile, profileGroup, SelectLaunchProfileCommand,
-                    string.Equals(profile, SelectedLaunchProfile, StringComparison.Ordinal)));
+            foreach (var slot in profileSlots)
+            {
+                var selection = new RunSelection(configuration, slot.Value);
+                var label = slot.LabelPart is null ? configuration : $"{configuration} - {slot.LabelPart}";
+                if (selection == defaultSelection) label += "   (default)";
+                RunOptions.Add(new RunChoice(label, () => _host.StartRun(this, selection)));
+            }
         }
-        HasLaunchProfiles = LaunchProfiles.Count > 0;
         OnPropertyChanged(nameof(RunTip));
     }
 
-    /// <summary>Moves the radio marks to the current selections without touching either collection — see
-    /// <see cref="RunChoice.IsSelected"/> for why the rows are updated rather than rebuilt.</summary>
-    private void SyncSelection()
+    /// <summary>The configuration the plain Run button picks: <c>Debug</c> if the solution declares it,
+    /// otherwise whatever the solution does declare, otherwise the literal <c>Debug</c> (so the fallback is
+    /// still a name <c>dotnet run</c> accepts rather than empty).</summary>
+    private string PickDefaultConfiguration()
     {
-        foreach (var choice in Configurations)
-            choice.IsSelected = string.Equals(choice.Value, SelectedConfiguration, StringComparison.OrdinalIgnoreCase);
-        foreach (var choice in LaunchProfiles)
-            choice.IsSelected = string.Equals(choice.Value, SelectedLaunchProfile, StringComparison.Ordinal);
-    }
-
-    /// <summary>The configuration to select given <paramref name="preferred"/>: itself when the solution still
-    /// declares it, otherwise <c>Debug</c>, otherwise whatever the solution does declare. Never returns a name
-    /// the solution doesn't have — that is the whole point.</summary>
-    private string PickConfiguration(string preferred)
-    {
-        foreach (var c in _solutionConfigurations)
-            if (string.Equals(c, preferred, StringComparison.OrdinalIgnoreCase)) return c;
         foreach (var c in _solutionConfigurations)
             if (string.Equals(c, DefaultConfiguration, StringComparison.OrdinalIgnoreCase)) return c;
         return _solutionConfigurations.Count > 0 ? _solutionConfigurations[0] : DefaultConfiguration;

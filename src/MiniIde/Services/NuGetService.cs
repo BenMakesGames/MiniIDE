@@ -39,7 +39,8 @@ public class NuGetService
 
     public async Task<IReadOnlyList<string>> GetVersionsAsync(string packageId, bool includePrerelease, CancellationToken ct = default)
     {
-        var res = await _repo.GetResourceAsync<MetadataResource>(ct);
+        var res = await _repo.GetResourceAsync<MetadataResource>(ct)
+            ?? throw new InvalidOperationException("NuGet feed does not expose a MetadataResource.");
         var versions = await res.GetVersions(packageId, includePrerelease, includeUnlisted: false, _cache, _log, ct);
         return versions.OrderByDescending(v => v).Select(v => v.ToNormalizedString()).ToList();
     }
@@ -51,7 +52,8 @@ public class NuGetService
     /// are both true so a version pinned in the .csproj is still resolvable even if it was later unlisted.</summary>
     public async Task<IPackageSearchMetadata?> GetMetadataAsync(string packageId, string version, CancellationToken ct = default)
     {
-        var res = await _repo.GetResourceAsync<PackageMetadataResource>(ct);
+        var res = await _repo.GetResourceAsync<PackageMetadataResource>(ct)
+            ?? throw new InvalidOperationException("NuGet feed does not expose a PackageMetadataResource.");
         var identity = new PackageIdentity(packageId, NuGetVersion.Parse(version));
         return await res.GetMetadataAsync(identity, _cache, _log, ct);
     }

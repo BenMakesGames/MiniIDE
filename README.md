@@ -28,12 +28,13 @@ a "dashboard" for managing my solution, and ~~ultimately: to reach a point where
 
 ### my nice-to-haves
 
-| feature                                               | status                                      |
-| ----------------------------------------------------- | ------------------------------------------- |
-| syntax highlighting for C#, JSON, XML                 | ✅                                           |
-| syntax highlighting for other .NET languages (F#, VB) | ❌                                           |
-| nice test result UI (not just console output)         | ❌                                           |
-| a way to perform common refactors?                    | ❌ - maybe better for Claude + a Roslyn MCP? |
+| feature                                               | status                                                |
+| ----------------------------------------------------- | ----------------------------------------------------- |
+| syntax highlighting for C#, JSON, XML                 | ✅                                                     |
+| syntax highlighting for other .NET languages (F#, VB) | ❌                                                     |
+| nice test result UI (not just console output)         | ❌                                                     |
+| performance profiling? (identify CPU & RAM hotspots)  | ❌ - possible bloat - research off-the-shelf solutions |
+| a way to perform common refactors?                    | ❌ - maybe better for Claude + a Roslyn MCP?           |
 
 ### my GTFOs
 

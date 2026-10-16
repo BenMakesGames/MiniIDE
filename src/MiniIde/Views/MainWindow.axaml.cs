@@ -102,9 +102,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>The editor showing the active tab, or null when the active tab isn't a code tab. Only code
-    /// editors are ever registered with <see cref="_codeEditors"/>, so a non-null result implies
-    /// <c>ActiveTab</c> is an <see cref="EditorTabViewModel"/> (and its <c>FilePath</c> is non-null).</summary>
-    private TextEditor? FindActiveEditor() => _codeEditors.EditorFor(Vm.ActiveTab);
+    /// editors are ever registered with <see cref="_codeEditors"/>, so a non-null result implies the active
+    /// tab is an <see cref="EditorTabViewModel"/> (and its <c>FilePath</c> is non-null).</summary>
+    private TextEditor? FindActiveEditor() => _codeEditors.EditorFor(Vm.Tabs.ActiveTab);
 
     private async void OnOpenSolutionClick(object? sender, RoutedEventArgs e) => await OpenSolutionDialogAsync();
 
@@ -350,12 +350,12 @@ public partial class MainWindow : Window
 
     // ── Code-editor context menu (Go to definition / Rename) ──
 
-    // FindActiveEditor matched a code editor, so ActiveTab is an EditorTabViewModel and its FilePath is non-null.
+    // FindActiveEditor matched a code editor, so the active tab is an EditorTabViewModel and its FilePath is non-null.
     private async Task GoToDefinitionAsync()
     {
         var editor = FindActiveEditor();
         if (editor is null) return;
-        await Vm.GoToDefinitionAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset);
+        await Vm.GoToDefinitionAsync(Vm.Tabs.ActiveTab!.FilePath!, editor.CaretOffset);
     }
 
     private void OnCodeCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -384,7 +384,7 @@ public partial class MainWindow : Window
         var editor = FindActiveEditor();
         if (editor?.Document is null) return;
         await Vm.RenameSymbolAsync(
-            Vm.ActiveTab!.FilePath!, editor.CaretOffset, editor.Document.Text, PromptForNewNameAsync);
+            Vm.Tabs.ActiveTab!.FilePath!, editor.CaretOffset, editor.Document.Text, PromptForNewNameAsync);
     }
 
     // Shows the modal new-name dialog over this window. Returns the entered valid name, or null when the user

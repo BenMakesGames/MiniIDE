@@ -30,7 +30,7 @@ public class RunService
         };
         psi.ArgumentList.Add(verb);
         // VSTest `dotnet test` takes the project path positionally and rejects --project (MSB1001);
-        // `dotnet run` requires --project. See docs/tickets/complete for the fix-dotnet-test-invocation ticket.
+        // `dotnet run` requires --project.
         if (entry.Kind == ProjectKind.Tst)
         {
             psi.ArgumentList.Add(entry.Path);

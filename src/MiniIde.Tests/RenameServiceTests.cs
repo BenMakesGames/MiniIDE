@@ -1,4 +1,3 @@
-using Microsoft.Build.Locator;
 using MiniIde.Models;
 using MiniIde.Services;
 using Shouldly;
@@ -18,11 +17,7 @@ public sealed class RenameServiceTests : IAsyncLifetime
     private readonly List<string> _roots = new();
     private readonly List<WorkspaceService> _workspaces = new();
 
-    public ValueTask InitializeAsync()
-    {
-        if (!MSBuildLocator.IsRegistered) MSBuildLocator.RegisterDefaults();
-        return ValueTask.CompletedTask;
-    }
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
     public ValueTask DisposeAsync()
     {

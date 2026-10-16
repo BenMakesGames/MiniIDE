@@ -17,7 +17,7 @@ var model = await SolutionSerializers.SlnXml.OpenAsync("My.slnx", ct);
 foreach (var p in model.SolutionProjects) { /* p.FilePath */ }
 ```
 
-Use this for solution-tree view. Defer `MSBuildWorkspace.OpenProjectAsync` per-project until user opens/navigates.
+Use this for the project list. Defer `MSBuildWorkspace.OpenProjectAsync` per-project until user opens/navigates.
 
 ## Cold-start strategy
 
@@ -31,12 +31,11 @@ Historical worst case: 300 projects = hours ([roslyn#14325](https://github.com/d
 ## Disk reconcile (read-only-view law)
 
 The editor is a read-only window onto disk; external tools own writes. `WorkspaceService.ReconcileWithDiskAsync`
-brings the snapshot up to date before every semantic query and on window focus. Strictly disk → view — it
-**never** `TryApplyChanges` (that would write the file back).
+brings the snapshot up to date before every semantic query (go to definition, rename, Find problems).
+Strictly disk → view — it **never** `TryApplyChanges` (that would write the file back).
 
-Two modes. Normally it drains a **pending-set** the OS change feed pushed in (`MarkPathsChanged`) and overlays
-only those documents. `RequestFullRescan` (cold start, structural change, watcher overflow, focus, or no
-watcher at all) falls back to the whole-solution pass. See `disk-watching.md` for the feed.
+Always a whole-solution pass — no change feed tells it which files moved. Cheap because it's gated twice
+(below): unchanged documents cost one `stat` each.
 
 - **Content drift** (same file set, changed text) → fork the immutable snapshot with `WithDocumentText`. Skip
   files whose text already matches (`SourceText.ContentEquals`): a needless fork invalidates the cached
@@ -44,8 +43,8 @@ watcher at all) falls back to the whole-solution pass. See `disk-watching.md` fo
   without a real change; same-length overwrites change content mtime can't see.
 - **Two gates, not one.** A `(LastWriteTimeUtc, Length)` stamp decides whether to **read**; content decides
   whether to **fork**. The stamp is a read pre-filter, *not* a drift decision — that's what keeps
-  content-never-mtime intact. Only the fallback poll can miss a change preserving **both** mtime and length;
-  the watcher fires on the write regardless, so the primary path still catches it.
+  content-never-mtime intact. A change preserving **both** mtime and length is missed until the file is
+  touched again — an accepted limitation.
 - **Invariant that makes stamps safe**: write a stamp *only* alongside the read that produced the snapshot's
   text, and *sample it before* that read. Every stamp then describes a disk state at or before the snapshot's
   content, so a write racing a read leaves a stale stamp and is re-read. Stamps cost redundant reads, never
@@ -118,11 +117,6 @@ present via `Microsoft.CodeAnalysis.CSharp.Workspaces`. Forks the immutable snap
 |---|---|
 | Syntax highlight | `Classifier.GetClassifiedSpansAsync` |
 | Jump-to-def | `SymbolFinder.FindSourceDefinitionAsync` |
-| Find usages | `SymbolFinder.FindReferencesAsync` |
-| Go to implementation | `SymbolFinder.FindImplementationsAsync` (interface types/members) + `FindOverridesAsync` (class-member overrides) — union both |
-| Go to subclasses | `SymbolFinder.FindDerivedClassesAsync` (class) / `FindDerivedInterfacesAsync` (interface), `transitive: true` |
 | Errors/warnings | `Compilation.GetDiagnostics` |
 | Safe rename | `Renamer.RenameSymbolAsync` (+ `SymbolRenameOptions`) |
 
-- `FindImplementationsAsync` covers interfaces only, not class-member overrides — union `FindOverridesAsync` so an abstract/virtual base member resolves. `FindDerivedClassesAsync` excludes interface implementations, so an interface caret's "subclasses" are its derived *interfaces*; implementers stay under Go to Implementation.
-- All four take `projects: null` (whole solution) and map result `ISymbol`s to `FindHit`s via `symbol.Locations.Where(l => l.IsInSource)` — metadata/decompiled locations are dropped, so a framework implementer contributes no entry.

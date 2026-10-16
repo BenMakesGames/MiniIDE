@@ -19,39 +19,30 @@ public class EditorTabViewModel : DocumentTabViewModel
     // is only ever written together with the read that produced the buffer, and sampled before it.
     private FileStamp? _synced;
 
-    /// <summary>Whether this tab's file is known to have changed on disk since the buffer was read. Set by the
-    /// disk-change routing; consumed by <see cref="RevalidateFromDiskAsync"/> when the tab is next shown.
-    ///
-    /// <para>This is the tab's own dirty track, deliberately separate from the workspace's pending-set. A
-    /// single shared set would let whichever consumer drained first (typically a semantic query) erase the
-    /// mark the other one hadn't acted on yet, and an unopened tab would silently stay stale.</para></summary>
-    public bool IsStale { get; set; }
-
     internal EditorTabViewModel(string filePath, string content)
         : base(FileId(filePath), filePath, new TextDocument(content))
         => Mode = Path.GetExtension(filePath).ToFileKind().GetInfo().Highlight;
 
-    /// <summary>Brings the buffer up to date with disk and clears <see cref="IsStale"/>. The stamp gates the
+    /// <summary>Brings the buffer up to date with disk. The stamp gates the
     /// read, so revalidating an untouched file is a <c>stat</c> — which is what makes it safe to call on every
     /// tab activation and every window focus.
     ///
-    /// <para>Failure leaves the tab stale on purpose: a file caught mid-write by another tool reads as an
+    /// <para>Failure records nothing on purpose: a file caught mid-write by another tool reads as an
     /// <see cref="IOException"/>, and the honest response is to retry on the next activation rather than
     /// record a stamp for content we never got. A file that has vanished keeps its last-known text.</para></summary>
     public async Task RevalidateFromDiskAsync()
     {
-        if (FilePath is null) { IsStale = false; return; }
+        if (FilePath is null) return;
 
         var stamp = FileStamp.For(FilePath);
         if (stamp is null) return;
-        if (stamp == _synced) { IsStale = false; return; }
+        if (stamp == _synced) return;
 
         string text;
         try { text = await File.ReadAllTextAsync(FilePath); }
         catch { return; }
 
         _synced = stamp;
-        IsStale = false;
         ReloadFromDisk(text);
     }
 

@@ -1,6 +1,6 @@
 **tl;dr:** this is an experimental C# IDE, intended to be used alongside an external agentic AI that runs in its own thang (such as Claude Code's TUI (flawed though it may be)).
 
-it used to support free-text input - you know, like a normal editor - but **I decided to make it a "read-only IDE"**, and am adding refactor tools, instead. (read-only solves more problems than allowing live editing solved.)
+it used to support editing the code - you know, like a normal editor - but the more I use agentic coding tools, the more I find "I don't look at code anymore, let alone write it."
 
 > 🧚 **hey, listen!** [you can support my development of open-source software on Patreon](https://www.patreon.com/BenMakesGames), and/or [check out my game Astromino, on Steam!](https://store.steampowered.com/app/4644350/Astromino/)
 
@@ -20,25 +20,20 @@ so, like any ridiculous dev, I've decided to "just" make my own...
 
 ~~ultimately: to reach a point where I'm comfortable uninstalling Rider.~~ I did it :P
 
-| feature                                | status                  |
-| -------------------------------------- | ----------------------- |
-| syntax highlighting (C#, JSON, XML)    | ✅                       |
-| a decent-ish & modern-ish look & feel  | ✅                       |
-| jump to declaration                    | ✔ - could use a UI pass |
-| find usages                            | ✔ - could use a UI pass |
-| global search, w/ regex if you want it | ✔ - could use a UI pass |
-| solution-wide warnings & errors view   | ✔ - could use a UI pass |
-| NuGet package management               | ✔ - could use a UI pass |
+| feature                               | status                  |
+| ------------------------------------- | ----------------------- |
+| syntax highlighting (C#, JSON, XML)   | ✅                       |
+| a decent-ish & modern-ish look & feel | ✅                       |
+| per-project warnings & errors view    | ✔ - could use a UI pass |
+| NuGet package management              | ✔ - could use a UI pass |
 
 ### my nice-to-haves
 
-| feature                                                | status                 |
-| ------------------------------------------------------ | ---------------------- |
-| navigate interface implementations & inheritance trees | ❌                      |
-| nice test result UI (not just console output)          | ❌                      |
-| highlighting warnings & errors                         | ❌                      |
-| rename symbol                                          | ❓ - needs more testing |
-| other refactors?                                       | ❌                      |
+| feature                                       | status                 |
+| --------------------------------------------- | ---------------------- |
+| nice test result UI (not just console output) | ❌                      |
+| rename symbol                                 | ❓ - needs more testing |
+| other refactors?                              | ❌                      |
 
 ### my GTFOs
 

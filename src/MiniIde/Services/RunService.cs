@@ -77,7 +77,7 @@ public sealed class RunSession
     /// this with an <see cref="OperationCanceledException"/> instead.</summary>
     public Task Completion { get; }
 
-    /// <summary>Kills this run's process tree, and only this one. A no-op once it has exited, so the close
+    /// <summary>Kills this run's process tree, and only this one. A no-op once it has exited, so the stop
     /// and shutdown paths can call it unconditionally.</summary>
     public void Stop()
     {

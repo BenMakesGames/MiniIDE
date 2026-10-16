@@ -8,7 +8,6 @@ public static class FileIconPalette
     public static readonly IBrush Json       = Brush("#F5B301");
     public static readonly IBrush Xml        = Brush("#E37933");
     public static readonly IBrush Csproj     = Brush("#B026AD");
-    public static readonly IBrush Folder     = Brush("#DCB67A");
     public static readonly IBrush Text       = Brush("#B0B0B0");
     public static readonly IBrush Audio      = Brush("#4EC9B0");
     public static readonly IBrush Image      = Brush("#7D44DD");

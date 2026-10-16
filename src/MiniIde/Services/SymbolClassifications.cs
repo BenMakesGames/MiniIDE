@@ -4,12 +4,12 @@ using Microsoft.CodeAnalysis.Classification;
 namespace MiniIde.Services;
 
 /// <summary>Decides whether the thing under the caret is something a Roslyn symbol query (go to definition /
-/// find usages) could resolve, based on how Roslyn classified it.</summary>
+/// rename) could resolve, based on how Roslyn classified it.</summary>
 public static class SymbolClassifications
 {
     /// <summary>The classifications that name a resolvable symbol. An <em>allowlist</em>, not a denylist of
     /// keywords/strings/comments: a classification Roslyn adds in future should default to "not a symbol"
-    /// rather than silently enabling Find-usages on it. Exact <see cref="ClassificationTypeNames"/> constants —
+    /// rather than silently enabling symbol actions on it. Exact <see cref="ClassificationTypeNames"/> constants —
     /// no substring guessing at Roslyn's dotted variants ("keyword - control", "string - verbatim", …).</summary>
     private static readonly HashSet<string> Resolvable =
     [
@@ -35,31 +35,6 @@ public static class SymbolClassifications
         ClassificationTypeNames.NamespaceName,
     ];
 
-    /// <summary>The classifications on which <em>Go to Implementation</em> could plausibly resolve: an
-    /// interface type, or a member that can have implementations/overrides (a method, property, or event).
-    /// Deliberately excludes <c>ExtensionMethodName</c> — extension methods aren't overridable. Kind-aware but
-    /// still <em>approximate</em>: a concrete (non-virtual) method also carries <c>MethodName</c>, so it lights
-    /// up and the query simply finds nothing — the same leniency <see cref="AllowSymbolActions"/> already takes
-    /// (classifications can't see <c>abstract</c>/<c>virtual</c>, and the async semantic model must not run in
-    /// the synchronous menu-open handler).</summary>
-    private static readonly HashSet<string> Implementable =
-    [
-        ClassificationTypeNames.InterfaceName,
-        ClassificationTypeNames.MethodName,
-        ClassificationTypeNames.PropertyName,
-        ClassificationTypeNames.EventName,
-    ];
-
-    /// <summary>The classifications on which <em>Go to Subclasses</em> could plausibly resolve: a class,
-    /// record-class, or interface (the only kinds with derived types). Structs, record-structs, enums, and
-    /// delegates have none, so they stay dimmed.</summary>
-    private static readonly HashSet<string> Subclassable =
-    [
-        ClassificationTypeNames.ClassName,
-        ClassificationTypeNames.RecordClassName,
-        ClassificationTypeNames.InterfaceName,
-    ];
-
     /// <summary>Whether a symbol action can plausibly resolve at a position classified as
     /// <paramref name="covering"/>.
     ///
@@ -73,15 +48,6 @@ public static class SymbolClassifications
     /// right-clicked before the classifier finished). Allow it: the query itself reports "No symbol found"
     /// cheaply, which beats greying out the menu on a file that has only just opened.</para></summary>
     public static bool AllowSymbolActions(IReadOnlyList<string> covering) => Allow(covering, Resolvable);
-
-    /// <summary>Whether <em>Go to Implementation</em> could plausibly resolve at <paramref name="covering"/>.
-    /// Same empty-set leniency as <see cref="AllowSymbolActions"/> (an unclassified document enables it rather
-    /// than greying out a just-opened file).</summary>
-    public static bool AllowImplementationActions(IReadOnlyList<string> covering) => Allow(covering, Implementable);
-
-    /// <summary>Whether <em>Go to Subclasses</em> could plausibly resolve at <paramref name="covering"/>. Same
-    /// empty-set leniency as <see cref="AllowSymbolActions"/>.</summary>
-    public static bool AllowSubclassActions(IReadOnlyList<string> covering) => Allow(covering, Subclassable);
 
     private static bool Allow(IReadOnlyList<string> covering, HashSet<string> allowlist)
     {

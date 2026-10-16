@@ -12,446 +12,340 @@
         Title="{Binding WindowTitle}"
         Icon="/Assets/icon.ico"
         Background="#1E1E22">
-    <Grid RowDefinitions="Auto,Auto,*">
-        <Border Grid.Row="1" Background="#1E1E22" BorderThickness="0,0,0,1" BorderBrush="#40808080">
-            <Grid Margin="8,4" ColumnDefinitions="Auto,*,Auto">
-                <StackPanel Grid.Column="0" Orientation="Horizontal">
-                    <TextBlock Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18" Background="Transparent" DoubleTapped="OnSolutionNameDoubleTapped">
-                        <TextBlock.ContextMenu>
-                            <ContextMenu Opening="OnSolutionCtxOpening">
-                                <ContextMenu.Styles>
-                                    <!-- An explicit Foreground on the icon TextBlock overrides the theme's
-                                         disabled-state dimming, so the glyph stays bright while the item's
-                                         text greys out. Dim the whole item to keep icon + text in sync. -->
-                                    <Style Selector="MenuItem:disabled">
-                                        <Setter Property="Opacity" Value="0.4"/>
-                                    </Style>
-                                </ContextMenu.Styles>
-                                <MenuItem Name="SolutionCtxOpenNew" Header="_Open solution..." Click="OnOpenSolutionClick"/>
-                                <MenuItem Header="_Reload solution" Click="OnReloadSolutionClick">
-                                    <MenuItem.Icon>
-                                        <TextBlock Text="{x:Static m:ActionIcon.Reload}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#3FB950" VerticalAlignment="Center"/>
-                                    </MenuItem.Icon>
-                                </MenuItem>
-                                <Separator/>
-                                <MenuItem Header="Open in _Claude Code" Click="OnCtxOpenWithClaudeClick">
-                                    <MenuItem.Icon>
-                                        <TextBlock Text="{x:Static m:ActionIcon.Claude}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
-                                    </MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
-                                    <MenuItem.Icon>
-                                        <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
-                                    </MenuItem.Icon>
-                                </MenuItem>
-                                <Separator/>
-                                <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
-                                <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
-                            </ContextMenu>
-                        </TextBlock.ContextMenu>
-                    </TextBlock>
-                    <!-- Pull/push and +Git are one slot in two states, never both: a solution either is in a
-                         repository (pull/push) or is one `git init` away from being in one (+Git). With no
-                         solution open neither is true, and the pair shows disabled rather than offering to
-                         initialize a repository nowhere — see MainWindowViewModel.OffersGitInit.
-                         Deliberately subordinate to the solution name: flat, transparent, glyph-only. -->
-                    <StackPanel Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center"
-                                IsVisible="{Binding !OffersGitInit}">
-                        <Button Padding="8,2" MinHeight="0" Background="Transparent"
-                                Command="{Binding GitPullCommand}"
-                                ToolTip.Tip="{Binding PullTip}">
-                            <!-- No explicit Foreground: one would override the theme's disabled-state dimming
-                                 and leave the glyph bright on a greyed-out button (same trap the solution
-                                 context menu documents). -->
-                            <TextBlock Text="{x:Static m:ActionIcon.GitPull}" FontFamily="{StaticResource IconFont}" FontSize="16"/>
-                        </Button>
-                        <Button Padding="8,2" MinHeight="0" Background="Transparent" Margin="2,0,0,0"
-                                Command="{Binding GitPushCommand}"
-                                ToolTip.Tip="{Binding PushTip}">
-                            <TextBlock Text="{x:Static m:ActionIcon.GitPush}" FontFamily="{StaticResource IconFont}" FontSize="16"/>
-                        </Button>
-                    </StackPanel>
-                    <Button Content="+Git" Padding="8,2" MinHeight="0" Background="Transparent"
-                            Margin="12,0,0,0" VerticalAlignment="Center"
-                            IsVisible="{Binding OffersGitInit}"
-                            Command="{Binding GitInitCommand}"
-                            ToolTip.Tip="{Binding InitTip}"/>
+    <Window.Styles>
+        <!-- An explicit Foreground on a menu item's icon TextBlock overrides the theme's disabled-state dimming,
+             so the glyph stays bright while the item's text greys out. Dim the whole item to keep icon + text
+             in sync. -->
+        <Style Selector="MenuItem:disabled">
+            <Setter Property="Opacity" Value="0.4"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*,Auto">
+        <Border Grid.Row="0" Background="#1E1E22" BorderThickness="0,0,0,1" BorderBrush="#40808080">
+            <DockPanel Margin="8,4">
+            <Button DockPanel.Dock="Right" Content="?" Padding="10,2" MinHeight="0" Background="Transparent"
+                    VerticalAlignment="Center" ToolTip.Tip="Help">
+                <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedRight">
+                        <MenuItem Header="_File-watcher diagnostics" Command="{Binding ShowFileWatcherCommand}"/>
+                        <MenuItem Header="_About" Command="{Binding ShowAboutCommand}"/>
+                    </MenuFlyout>
+                </Button.Flyout>
+            </Button>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18" Background="Transparent" DoubleTapped="OnSolutionNameDoubleTapped">
+                    <TextBlock.ContextMenu>
+                        <ContextMenu Opening="OnSolutionCtxOpening">
+                            <MenuItem Name="SolutionCtxOpenNew" Header="_Open solution..." Click="OnOpenSolutionClick"/>
+                            <MenuItem Header="_Reload solution" Click="OnReloadSolutionClick">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="{x:Static m:ActionIcon.Reload}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#3FB950" VerticalAlignment="Center"/>
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <Separator/>
+                            <MenuItem Header="Open in _Claude Code" Click="OnCtxOpenWithClaudeClick">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="{x:Static m:ActionIcon.Claude}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <Separator/>
+                            <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
+                            <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
+                        </ContextMenu>
+                    </TextBlock.ContextMenu>
+                </TextBlock>
+                <!-- Pull/push and +Git are one slot in two states, never both: a solution either is in a
+                     repository (pull/push) or is one `git init` away from being in one (+Git). With no
+                     solution open neither is true, and the pair shows disabled rather than offering to
+                     initialize a repository nowhere — see MainWindowViewModel.OffersGitInit.
+                     Deliberately subordinate to the solution name: flat, transparent, glyph-only. -->
+                <StackPanel Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center"
+                            IsVisible="{Binding !OffersGitInit}">
+                    <Button Padding="8,2" MinHeight="0" Background="Transparent"
+                            Command="{Binding GitPullCommand}"
+                            ToolTip.Tip="{Binding PullTip}">
+                        <!-- No explicit Foreground: one would override the theme's disabled-state dimming
+                             and leave the glyph bright on a greyed-out button. -->
+                        <TextBlock Text="{x:Static m:ActionIcon.GitPull}" FontFamily="{StaticResource IconFont}" FontSize="16"/>
+                    </Button>
+                    <Button Padding="8,2" MinHeight="0" Background="Transparent" Margin="2,0,0,0"
+                            Command="{Binding GitPushCommand}"
+                            ToolTip.Tip="{Binding PushTip}">
+                        <TextBlock Text="{x:Static m:ActionIcon.GitPush}" FontFamily="{StaticResource IconFont}" FontSize="16"/>
+                    </Button>
                 </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <ComboBox Width="280"
-                              ItemsSource="{Binding Projects}"
-                              SelectedItem="{Binding StartupProject}">
-                        <ComboBox.Styles>
-                            <Style Selector="ComboBoxItem" x:DataType="m:ProjectEntry">
-                                <Setter Property="IsEnabled" Value="{Binding IsRunnable}"/>
-                            </Style>
-                            <Style Selector="ComboBoxItem:disabled">
-                                <Setter Property="Opacity" Value="0.4"/>
-                            </Style>
-                        </ComboBox.Styles>
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate DataType="m:ProjectEntry">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding IconGlyph}"
-                                               FontFamily="{StaticResource IconFont}"
-                                               FontSize="16"
-                                               Foreground="{Binding IconColor}"
-                                               Margin="0,0,6,0"
-                                               VerticalAlignment="Center"/>
-                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <SplitButton Content="{Binding RunLabel}" Margin="8,0,0,0" Command="{Binding PlayCommand}">
-                        <SplitButton.Flyout>
-                            <!-- A plain Flyout rather than a MenuFlyout: a MenuFlyout would have to carry the
-                                 per-row ToggleType/IsChecked/Command through ItemContainerTheme, whose setter
-                                 bindings resolve against the parent VM instead of the item (Avalonia #18146).
-                                 Hand-laid content binds normally and gives the two groups real headers and a
-                                 separator. It does not light-dismiss on a pick, which suits a two-axis
-                                 selection: both can be set in one visit. -->
-                            <Flyout Placement="BottomEdgeAlignedRight">
-                                <StackPanel MinWidth="180">
-                                    <TextBlock Text="Configuration" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
-                                    <ItemsControl ItemsSource="{Binding Configurations}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate DataType="vm:RunChoice">
-                                                <!-- IsChecked is one-way: the click's own toggle is transient and the
-                                                     command's write back through the VM is what makes it stick. -->
-                                                <RadioButton GroupName="RunConfiguration"
-                                                             Content="{Binding Label}"
-                                                             IsChecked="{Binding IsSelected, Mode=OneWay}"
-                                                             Command="{Binding Select}"
-                                                             CommandParameter="{Binding Value}"/>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                    <!-- The whole group vanishes for a project with no launch settings, and for
-                                         every test project: `dotnet test` has no launch-profile option at all. -->
-                                    <StackPanel IsVisible="{Binding HasLaunchProfiles}">
-                                        <Border Height="1" Background="#40808080" Margin="0,8"/>
-                                        <TextBlock Text="Launch profile" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
-                                        <ItemsControl ItemsSource="{Binding LaunchProfiles}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate DataType="vm:RunChoice">
-                                                    <RadioButton GroupName="RunLaunchProfile"
-                                                                 Content="{Binding Label}"
-                                                                 IsChecked="{Binding IsSelected, Mode=OneWay}"
-                                                                 Command="{Binding Select}"
-                                                                 CommandParameter="{Binding Value}"/>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Flyout>
-                        </SplitButton.Flyout>
-                    </SplitButton>
-                </StackPanel>
-            </Grid>
+                <Button Content="+Git" Padding="8,2" MinHeight="0" Background="Transparent"
+                        Margin="12,0,0,0" VerticalAlignment="Center"
+                        IsVisible="{Binding OffersGitInit}"
+                        Command="{Binding GitInitCommand}"
+                        ToolTip.Tip="{Binding InitTip}"/>
+            </StackPanel>
+            </DockPanel>
         </Border>
 
-        <Grid Grid.Row="2" x:Name="Workspace">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="4"/>
-                <!-- MinHeight stops the splitter dragging the panel down to an unusable sliver. Collapsing drops
-                     it to 0 so the 22px bar can undercut it, and restoring puts it back (MainWindow.axaml.cs). -->
-                <RowDefinition Height="220" MinHeight="200"/>
-            </Grid.RowDefinitions>
-            <Grid Grid.Row="0" ColumnDefinitions="280,4,*">
-                <TreeView Grid.Column="0" Background="#1E1E22" ItemsSource="{Binding Tree}" x:Name="SolutionTree">
-                    <!-- Stretch the item so its header ContentPresenter fills the full row height. The Fluent
-                         default is VerticalAlignment=Center, which leaves the presenter shorter than the row
-                         (top/bottom dead strips). Horizontal is already Stretch and Padding already 0 in the
-                         Fluent theme, so VerticalAlignment is the only lever needed. Avalonia's TreeViewItem
-                         has no HorizontalContentAlignment/VerticalContentAlignment; the presenter template-binds
-                         HorizontalAlignment/VerticalAlignment instead. -->
-                    <TreeView.ItemContainerTheme>
-                        <ControlTheme TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
-                            <Setter Property="VerticalAlignment" Value="Stretch"/>
-                        </ControlTheme>
-                    </TreeView.ItemContainerTheme>
-                    <TreeView.ItemTemplate>
-                        <TreeDataTemplate DataType="m:TreeNode" ItemsSource="{Binding Children}">
-                            <StackPanel Orientation="Horizontal" Background="Transparent" ContextRequested="OnTreeCtxRequested">
-                                <StackPanel.ContextMenu>
+        <Grid Grid.Row="1" ColumnDefinitions="300,4,*">
+            <!-- The project list: one card per project. Each card runs its own project under its own selection,
+                 and carries a button per live run — the only way back to a run whose tab was closed. -->
+            <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl ItemsSource="{Binding Projects}" Margin="0,4">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:ProjectItemViewModel">
+                            <Border Margin="6,3" Padding="10,8" CornerRadius="4"
+                                    Background="#26262C" BorderBrush="#40808080" BorderThickness="1">
+                                <Border.ContextMenu>
                                     <ContextMenu>
-                                        <ContextMenu.Styles>
-                                            <!-- An explicit Foreground on the icon TextBlock overrides the theme's
-                                                 disabled-state dimming, so the glyph stays bright while the item's
-                                                 text greys out. Dim the whole item to keep icon + text in sync. -->
-                                            <Style Selector="MenuItem:disabled">
-                                                <Setter Property="Opacity" Value="0.4"/>
-                                            </Style>
-                                        </ContextMenu.Styles>
-                                        <MenuItem Header="Open in _external app" Click="OnCtxOpenExternallyClick"
-                                                  IsEnabled="{Binding CanOpenExternally}">
+                                        <MenuItem Header="Find _problems" Command="{Binding FindProblemsCommand}">
                                             <MenuItem.Icon>
-                                                <TextBlock Text="{x:Static m:ActionIcon.OpenExternal}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{x:Static m:ActionIcon.FindProblems}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
                                             </MenuItem.Icon>
                                         </MenuItem>
+                                        <MenuItem Header="Manage _NuGet packages" Command="{Binding ManageNuGetCommand}">
+                                            <MenuItem.Icon>
+                                                <TextBlock Text="{x:Static m:ActionIcon.NuGet}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <Separator/>
                                         <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
                                             <MenuItem.Icon>
                                                 <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
                                             </MenuItem.Icon>
                                         </MenuItem>
+                                        <Separator/>
                                         <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
                                         <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
-                                        <!-- Project rows only: a .cs file or a folder is not a runnable thing, so
-                                             the divider goes with the item rather than leaving a stray rule at the
-                                             bottom of every file's menu. The submenu's rows are (this project ×
-                                             configuration) pairs — no one binding source has both halves — so they
-                                             are filled in by OnTreeCtxRequested rather than bound here. -->
-                                        <Separator IsVisible="{Binding IsProject}"/>
-                                        <MenuItem Name="TreeCtxRun" Header="_Run" IsVisible="{Binding IsProject}">
-                                            <MenuItem.Icon>
-                                                <TextBlock Text="{x:Static m:ActionIcon.Run}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#6BBF59" VerticalAlignment="Center"/>
-                                            </MenuItem.Icon>
-                                        </MenuItem>
                                     </ContextMenu>
-                                </StackPanel.ContextMenu>
-                                <TextBlock Text="{Binding IconGlyph}"
-                                           FontFamily="{StaticResource IconFont}"
-                                           FontSize="16"
-                                           Foreground="{Binding IconColor}"
-                                           Margin="0,0,6,0"
-                                           VerticalAlignment="Center"/>
-                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </TreeDataTemplate>
-                    </TreeView.ItemTemplate>
-                </TreeView>
-                <GridSplitter Grid.Column="1" Background="#2D2D30"/>
-
-                <TabControl Grid.Column="2" Background="#1E1E22" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
-                    <TabControl.ItemTemplate>
-                        <DataTemplate DataType="vm:TabViewModelBase">
-                            <StackPanel Orientation="Horizontal" PointerPressed="OnTabHeaderPointerPressed">
-                                <StackPanel.ContextMenu>
-                                    <!-- Path actions are inert on output tabs (no backing file), so each item's
-                                         IsEnabled binds to the tab's FilePath. Keep this declarative: ContextMenu.Opening
-                                         is raised before the menu is parented, so a handler there sees a null DataContext
-                                         on a menu's first open and mis-computes enablement (see docs/avalonia.md). -->
-                                    <ContextMenu>
-                                        <ContextMenu.Styles>
-                                            <Style Selector="MenuItem:disabled">
-                                                <Setter Property="Opacity" Value="0.4"/>
-                                            </Style>
-                                        </ContextMenu.Styles>
-                                        <MenuItem Header="Open in _external app" Click="OnCtxOpenExternallyClick"
-                                                  IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}">
-                                            <MenuItem.Icon>
-                                                <TextBlock Text="{x:Static m:ActionIcon.OpenExternal}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
-                                            </MenuItem.Icon>
-                                        </MenuItem>
-                                        <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick"
-                                                  IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}">
-                                            <MenuItem.Icon>
-                                                <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
-                                            </MenuItem.Icon>
-                                        </MenuItem>
-                                        <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"
-                                                  IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                                        <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"
-                                                  IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                                    </ContextMenu>
-                                </StackPanel.ContextMenu>
-                                <Button Content="✕" Margin="0,0,6,0" Padding="4,0" FontSize="10" MinHeight="0" MinWidth="0" Click="OnCloseTabClick" Tag="{Binding}"/>
-                                <TextBlock Text="{Binding Header}"/>
-                            </StackPanel>
+                                </Border.ContextMenu>
+                                <StackPanel Spacing="8">
+                                    <Grid ColumnDefinitions="Auto,*,Auto">
+                                        <TextBlock Grid.Column="0" Text="{Binding IconGlyph}"
+                                                   FontFamily="{StaticResource IconFont}"
+                                                   FontSize="20"
+                                                   Foreground="{Binding IconColor}"
+                                                   Margin="0,0,8,0"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip.Tip="{Binding Path}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="15" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding Path}"/>
+                                        <!-- Starred projects pin to the top of the list. Flat and glyph-only so it reads
+                                             as a mark on the card, not an action competing with Run. -->
+                                        <Button Grid.Column="2" Padding="4,0" MinHeight="0" MinWidth="0"
+                                                Background="Transparent" VerticalAlignment="Center"
+                                                Command="{Binding ToggleStarCommand}"
+                                                AutomationProperties.Name="{Binding StarTip}"
+                                                ToolTip.Tip="{Binding StarTip}">
+                                            <TextBlock Text="{Binding StarGlyph}" FontFamily="{StaticResource IconFont}"
+                                                       FontSize="18" Foreground="{Binding StarColor}"/>
+                                        </Button>
+                                    </Grid>
+                                    <!-- No Run for a project that can't be run: hidden, not disabled. -->
+                                    <WrapPanel IsVisible="{Binding ShowsRunRow}">
+                                        <SplitButton Content="▶ Run" Margin="0,0,6,4"
+                                                     IsVisible="{Binding IsRunnable}"
+                                                     Command="{Binding RunCommand}"
+                                                     ToolTip.Tip="{Binding RunTip}"
+                                                     ToolTip.ShowOnDisabled="True">
+                                            <SplitButton.Flyout>
+                                                <!-- A plain Flyout rather than a MenuFlyout: a MenuFlyout would have to carry the
+                                                     per-row ToggleType/IsChecked/Command through ItemContainerTheme, whose setter
+                                                     bindings resolve against the parent VM instead of the item (Avalonia #18146).
+                                                     Hand-laid content binds normally and gives the two groups real headers and a
+                                                     separator. It does not light-dismiss on a pick, which suits a two-axis
+                                                     selection: both can be set in one visit. -->
+                                                <Flyout Placement="BottomEdgeAlignedLeft">
+                                                    <StackPanel MinWidth="180">
+                                                        <TextBlock Text="Configuration" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
+                                                        <ItemsControl ItemsSource="{Binding Configurations}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate DataType="vm:RunChoice">
+                                                                    <!-- IsChecked is one-way: the click's own toggle is transient and the
+                                                                         command's write back through the VM is what makes it stick. -->
+                                                                    <RadioButton GroupName="{Binding Group}"
+                                                                                 Content="{Binding Label}"
+                                                                                 IsChecked="{Binding IsSelected, Mode=OneWay}"
+                                                                                 Command="{Binding Select}"
+                                                                                 CommandParameter="{Binding Value}"/>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                        <!-- The whole group vanishes for a project with no launch settings, and for
+                                                             every test project: `dotnet test` has no launch-profile option at all. -->
+                                                        <StackPanel IsVisible="{Binding HasLaunchProfiles}">
+                                                            <Border Height="1" Background="#40808080" Margin="0,8"/>
+                                                            <TextBlock Text="Launch profile" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
+                                                            <ItemsControl ItemsSource="{Binding LaunchProfiles}">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate DataType="vm:RunChoice">
+                                                                        <RadioButton GroupName="{Binding Group}"
+                                                                                     Content="{Binding Label}"
+                                                                                     IsChecked="{Binding IsSelected, Mode=OneWay}"
+                                                                                     Command="{Binding Select}"
+                                                                                     CommandParameter="{Binding Value}"/>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </Flyout>
+                                            </SplitButton.Flyout>
+                                        </SplitButton>
+                                        <!-- One button per live run. They vanish as their processes exit, and come back
+                                             if a run is restarted from its tab. -->
+                                        <ItemsControl ItemsSource="{Binding LiveRuns}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="vm:OutputTabViewModel">
+                                                    <Button Margin="0,0,6,4" Padding="8,2"
+                                                            Command="{Binding $parent[ItemsControl].((vm:ProjectItemViewModel)DataContext).ShowRunCommand}"
+                                                            CommandParameter="{Binding}"
+                                                            ToolTip.Tip="{Binding Header}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <Ellipse Width="8" Height="8" Fill="#3FB950" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                            <TextBlock Text="{Binding ButtonLabel}" VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
                         </DataTemplate>
-                    </TabControl.ItemTemplate>
-                    <TabControl.DataTemplates>
-                        <DataTemplate DataType="vm:EditorTabViewModel">
-                            <ae:TextEditor IsReadOnly="True"
-                                           ShowLineNumbers="True"
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+            <GridSplitter Grid.Column="1" Background="#2D2D30"/>
+
+            <TabControl Grid.Column="2" Background="#1E1E22" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
+                <TabControl.ItemTemplate>
+                    <DataTemplate DataType="vm:TabViewModelBase">
+                        <StackPanel Orientation="Horizontal" PointerPressed="OnTabHeaderPointerPressed">
+                            <StackPanel.ContextMenu>
+                                <!-- Path actions are inert on fileless tabs (output, problems, NuGet), so each item's
+                                     IsEnabled binds to the tab's FilePath. Keep this declarative: ContextMenu.Opening
+                                     is raised before the menu is parented, so a handler there sees a null DataContext
+                                     on a menu's first open and mis-computes enablement (see docs/avalonia.md). -->
+                                <ContextMenu>
+                                    <MenuItem Header="Open in _external app" Click="OnCtxOpenExternallyClick"
+                                              IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                        <MenuItem.Icon>
+                                            <TextBlock Text="{x:Static m:ActionIcon.OpenExternal}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick"
+                                              IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                        <MenuItem.Icon>
+                                            <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"
+                                              IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                                    <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"
+                                              IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                                </ContextMenu>
+                            </StackPanel.ContextMenu>
+                            <Button Content="✕" Margin="0,0,6,0" Padding="4,0" FontSize="10" MinHeight="0" MinWidth="0" Click="OnCloseTabClick" Tag="{Binding}"/>
+                            <TextBlock Text="{Binding Header}"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </TabControl.ItemTemplate>
+                <TabControl.DataTemplates>
+                    <DataTemplate DataType="vm:EditorTabViewModel">
+                        <ae:TextEditor IsReadOnly="True"
+                                       ShowLineNumbers="True"
+                                       FontFamily="Consolas,monospace"
+                                       FontSize="13"
+                                       Background="#000000"
+                                       Foreground="#DCDCDC"
+                                       Name="Editor"
+                                       AttachedToVisualTree="OnEditorAttached"
+                                       DataContextChanged="OnEditorDataContextChanged"
+                                       DetachedFromVisualTree="OnEditorDetached">
+                            <ae:TextEditor.ContextMenu>
+                                <ContextMenu Opening="OnCodeCtxOpening">
+                                    <MenuItem Name="CtxGoToDefItem" Header="Go to definition" InputGesture="F12" Click="OnCtxGoToDefClick"/>
+                                    <Separator/>
+                                    <MenuItem Name="CtxRenameItem" Header="Rename…" Click="OnCtxRenameClick"/>
+                                </ContextMenu>
+                            </ae:TextEditor.ContextMenu>
+                        </ae:TextEditor>
+                    </DataTemplate>
+                    <!-- Same three handlers as the code template: each binder ignores editors showing the
+                         other kind of tab, so the window needs one handler trio, not one per kind. -->
+                    <DataTemplate DataType="vm:OutputTabViewModel">
+                        <Grid RowDefinitions="Auto,*">
+                            <!-- Stop/Run live here: each run owns its own process, so the only place that can name
+                                 which one to act on is the tab showing it. Closing the tab does NOT stop the run —
+                                 this Stop is the only way to. Like the editor below, this strip is realized once and
+                                 reused across every output tab, so everything it shows must come from the bound tab
+                                 — hence IsVisible on HasRun, which hides it on the NuGet and Git output tabs. -->
+                            <Border Grid.Row="0"
+                                    IsVisible="{Binding HasRun}"
+                                    Background="#1E1E22"
+                                    BorderThickness="0,0,0,1"
+                                    BorderBrush="#40808080"
+                                    Padding="6,4">
+                                <StackPanel Orientation="Horizontal">
+                                    <!-- One slot, two states, never both: a live run can only be stopped and an
+                                         exited one can only be restarted. Stop stays on screen (disabled) while the
+                                         kill is in flight — the run isn't restartable yet. -->
+                                    <Button Content="■ Stop"
+                                            Padding="10,2" MinHeight="0"
+                                            IsVisible="{Binding IsRunLive}"
+                                            Command="{Binding StopRunCommand}"
+                                            ToolTip.Tip="{Binding StopTip}"/>
+                                    <Button Content="▶ Run"
+                                            Padding="10,2" MinHeight="0"
+                                            IsVisible="{Binding !IsRunLive}"
+                                            Command="{Binding RunAgainCommand}"
+                                            ToolTip.Tip="Run this project again, same configuration and profile"/>
+                                    <TextBlock Text="{Binding RunState}"
+                                               Margin="10,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Foreground="#9A9AA0"/>
+                                </StackPanel>
+                            </Border>
+                            <ae:TextEditor Grid.Row="1"
+                                           IsReadOnly="True"
+                                           ShowLineNumbers="False"
+                                           WordWrap="False"
                                            FontFamily="Consolas,monospace"
                                            FontSize="13"
                                            Background="#000000"
                                            Foreground="#DCDCDC"
-                                           Name="Editor"
                                            AttachedToVisualTree="OnEditorAttached"
                                            DataContextChanged="OnEditorDataContextChanged"
-                                           DetachedFromVisualTree="OnEditorDetached">
-                                <ae:TextEditor.ContextMenu>
-                                    <ContextMenu Opening="OnCodeCtxOpening">
-                                        <MenuItem Name="CtxSearchItem" Header="Search solution" InputGesture="Ctrl+Shift+F" Click="OnCtxSearchClick"/>
-                                        <MenuItem Name="CtxFindUsagesItem" Header="Find usages" InputGesture="Shift+F12" Click="OnCtxFindUsagesClick"/>
-                                        <MenuItem Name="CtxGoToDefItem" Header="Go to definition" InputGesture="F12" Click="OnCtxGoToDefClick"/>
-                                        <MenuItem Name="CtxGoToImplItem" Header="Go to _Implementation" Click="OnCtxGoToImplClick"/>
-                                        <MenuItem Name="CtxGoToSubclassesItem" Header="Go to Su_bclasses" Click="OnCtxGoToSubclassesClick"/>
-                                        <Separator/>
-                                        <MenuItem Name="CtxRenameItem" Header="Rename…" Click="OnCtxRenameClick"/>
-                                    </ContextMenu>
-                                </ae:TextEditor.ContextMenu>
-                            </ae:TextEditor>
-                        </DataTemplate>
-                        <!-- Same three handlers as the code template: each binder ignores editors showing the
-                             other kind of tab, so the window needs one handler trio, not one per kind. -->
-                        <DataTemplate DataType="vm:OutputTabViewModel">
-                            <Grid RowDefinitions="Auto,*">
-                                <!-- Stop/Run live here, not in the top bar: each run owns its own process, so the
-                                     only place that can name which one to act on is the tab showing it. Like the
-                                     editor below, this strip is realized once and reused across every output
-                                     tab, so everything it shows must come from the bound tab — hence
-                                     IsVisible on HasRun, which hides it on the NuGet output/metadata tabs. -->
-                                <Border Grid.Row="0"
-                                        IsVisible="{Binding HasRun}"
-                                        Background="#1E1E22"
-                                        BorderThickness="0,0,0,1"
-                                        BorderBrush="#40808080"
-                                        Padding="6,4">
-                                    <StackPanel Orientation="Horizontal">
-                                        <!-- One slot, two states, never both: a live run can only be stopped and an
-                                             exited one can only be restarted, so the pair swaps rather than showing
-                                             a permanently dead button beside the live one. Stop stays on screen
-                                             (disabled) while the kill is in flight — the run isn't restartable yet,
-                                             and swapping to Run there would offer an action that can't be taken. -->
-                                        <Button Content="■ Stop"
-                                                Padding="10,2" MinHeight="0"
-                                                IsVisible="{Binding IsRunLive}"
-                                                Command="{Binding StopRunCommand}"
-                                                ToolTip.Tip="{Binding StopTip}"/>
-                                        <Button Content="▶ Run"
-                                                Padding="10,2" MinHeight="0"
-                                                IsVisible="{Binding !IsRunLive}"
-                                                Command="{Binding RunAgainCommand}"
-                                                ToolTip.Tip="Run this project again, same configuration and profile"/>
-                                        <TextBlock Text="{Binding RunState}"
-                                                   Margin="10,0,0,0"
-                                                   VerticalAlignment="Center"
-                                                   Foreground="#9A9AA0"/>
-                                    </StackPanel>
-                                </Border>
-                                <ae:TextEditor Grid.Row="1"
-                                               IsReadOnly="True"
-                                               ShowLineNumbers="False"
-                                               WordWrap="False"
-                                               FontFamily="Consolas,monospace"
-                                               FontSize="13"
-                                               Background="#000000"
-                                               Foreground="#DCDCDC"
-                                               AttachedToVisualTree="OnEditorAttached"
-                                               DataContextChanged="OnEditorDataContextChanged"
-                                               DetachedFromVisualTree="OnEditorDetached"/>
-                            </Grid>
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:ImageTabViewModel">
-                            <Grid Background="#1E1E22">
-                                <Viewbox Stretch="Uniform"
-                                         StretchDirection="DownOnly"
-                                         HorizontalAlignment="Center"
-                                         VerticalAlignment="Center"
-                                         IsVisible="{Binding Image, Converter={x:Static ObjectConverters.IsNotNull}}">
-                                    <Image Source="{Binding Image}"/>
-                                </Viewbox>
-                                <TextBlock Text="{Binding Error}"
-                                           Foreground="#DCDCDC"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"
-                                           IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                            </Grid>
-                        </DataTemplate>
-                    </TabControl.DataTemplates>
-                </TabControl>
-            </Grid>
-
-            <GridSplitter Grid.Row="1" Background="#2D2D30" x:Name="BottomSplitter"/>
-
-            <!-- The toggle is a sibling of BottomTabs, not a child: TabControl has no header-area extension
-                 point, and keeping the button out of BottomTabs' visual tree means the tunneling
-                 restore-on-tab-click handler never sees the button's own press, so the two can't double-fire. -->
-            <Grid Grid.Row="2">
-                <TabControl Background="#1E1E22" x:Name="BottomTabs">
-                    <TabItem Header="Find" x:Name="FindTab">
-                        <Grid RowDefinitions="Auto,*,Auto" DataContext="{Binding Find}">
-                            <!-- Row 0 holds two mutually-exclusive rows: the normal search inputs and the
-                                 symbol-query context banner. A symbol query (find-usages / implementations /
-                                 subclasses) sets IsContextResult; a text search clears it. Gated inline with
-                                 {Binding !X} / {Binding X} — no converter (see docs/avalonia.md). -->
-                            <DockPanel Grid.Row="0" Margin="4" IsVisible="{Binding !IsContextResult}">
-                                <CheckBox DockPanel.Dock="Right" Content="Regex" IsChecked="{Binding UseRegex}" Margin="6,0,0,0"/>
-                                <CheckBox DockPanel.Dock="Right" Content="Case-sensitive" IsChecked="{Binding CaseSensitive}" Margin="6,0,0,0"/>
-                                <Button DockPanel.Dock="Right" Content="Search" Command="{Binding SearchCommand}" Margin="6,0,0,0"/>
-                                <TextBox x:Name="FindBox" Text="{Binding Query, Mode=TwoWay}" PlaceholderText="Search..."
-                                         KeyDown="OnFindKeyDown"/>
-                            </DockPanel>
-                            <DockPanel Grid.Row="0" Margin="4" IsVisible="{Binding IsContextResult}">
-                                <Button DockPanel.Dock="Left" Content="✕" Command="{Binding CloseContextCommand}"
-                                        Padding="8,2" Margin="0,0,8,0" Background="Transparent"
-                                        ToolTip.Tip="Close — back to search"/>
-                                <TextBlock Text="{Binding ContextLabel}" VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis"/>
-                            </DockPanel>
-                            <ListBox Grid.Row="1" Background="#000000" ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate DataType="m:FindHit">
-                                        <TextBlock>
-                                            <Run Text="{Binding Location.File}"/><Run Text=":"/><Run Text="{Binding Location.Line}"/><Run Text=" — "/><Run Text="{Binding Preview}"/>
-                                        </TextBlock>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                            <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4"/>
+                                           DetachedFromVisualTree="OnEditorDetached"/>
                         </Grid>
-                    </TabItem>
-
-                    <TabItem Header="NuGet">
-                        <Grid ColumnDefinitions="2*,4,3*,4,240" RowDefinitions="Auto,*,Auto" DataContext="{Binding NuGetVm}">
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Project" Margin="4"/>
-                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Package (current)" Margin="4"/>
-                            <StackPanel Grid.Row="0" Grid.Column="4" Orientation="Horizontal" Margin="4">
-                                <TextBlock Text="Versions" VerticalAlignment="Center"/>
-                                <CheckBox Content="Prerelease" IsChecked="{Binding IncludePrerelease}" Margin="10,0,0,0"/>
-                            </StackPanel>
-
-                            <ListBox Grid.Row="1" Grid.Column="0" Background="#000000"
-                                     x:Name="NuGetProjectsList"
-                                     AttachedToVisualTree="OnNuGetListsAttached"
-                                     ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate DataType="m:ProjectEntry">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="{Binding IconGlyph}"
-                                                       FontFamily="{StaticResource IconFont}"
-                                                       FontSize="16"
-                                                       Foreground="{Binding IconColor}"
-                                                       Margin="0,0,6,0"
-                                                       VerticalAlignment="Center"/>
-                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                            <GridSplitter Grid.Row="1" Grid.Column="1" Background="#2D2D30"/>
-                            <ListBox Grid.Row="1" Grid.Column="2" Background="#000000"
-                                     x:Name="NuGetPackagesList"
-                                     ItemsSource="{Binding Packages}" SelectedItem="{Binding SelectedPackage}">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate DataType="m:PackageEntry">
-                                        <Grid ColumnDefinitions="*,Auto">
-                                            <TextBlock Grid.Column="0" Text="{Binding Id}"/>
-                                            <TextBlock Grid.Column="1" Text="{Binding CurrentVersion}" Margin="8,0,0,0"/>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                            <GridSplitter Grid.Row="1" Grid.Column="3" Background="#2D2D30"/>
-                            <ListBox Grid.Row="1" Grid.Column="4" Background="#000000"
-                                     x:Name="NuGetVersionsList"
-                                     ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"/>
-
-                            <DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5" Margin="4">
-                                <Button DockPanel.Dock="Right" Content="Apply + Restore" Command="{Binding ApplyCommand}"/>
-                                <TextBlock Text="{Binding Status}" VerticalAlignment="Center"/>
-                            </DockPanel>
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:ImageTabViewModel">
+                        <Grid Background="#1E1E22">
+                            <Viewbox Stretch="Uniform"
+                                     StretchDirection="DownOnly"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     IsVisible="{Binding Image, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                <Image Source="{Binding Image}"/>
+                            </Viewbox>
+                            <TextBlock Text="{Binding Error}"
+                                       Foreground="#DCDCDC"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}"/>
                         </Grid>
-                    </TabItem>
-
-                    <TabItem Header="Problems" x:Name="ProblemsTab">
-                        <Grid RowDefinitions="Auto,*,Auto" DataContext="{Binding Problems}">
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:ProblemsTabViewModel">
+                        <Grid RowDefinitions="Auto,*,Auto">
                             <Grid Grid.Row="0" Margin="4" ColumnDefinitions="Auto,*,Auto">
                                 <Button Grid.Column="0" Content="Refresh" Command="{Binding RefreshCommand}"/>
                                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
@@ -461,11 +355,19 @@
                             </Grid>
                             <Grid Grid.Row="1">
                                 <TreeView Background="#000000" ItemsSource="{Binding Groups}"
-                                          x:Name="ProblemsTree"
-                                          AttachedToVisualTree="OnProblemsTreeAttached">
+                                          AttachedToVisualTree="OnProblemsTreeAttached"
+                                          KeyDown="OnProblemsTreeKeyDown">
+                                    <!-- Stretch the item so its header fills the full row height; the Fluent default
+                                         (Center) leaves dead strips above and below that swallow double-clicks.
+                                         Stretching the content horizontally lets a leaf's right-click menu open
+                                         anywhere on its row, not just over the text. -->
                                     <TreeView.ItemContainerTheme>
                                         <ControlTheme TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
                                             <Setter Property="VerticalAlignment" Value="Stretch"/>
+                                            <Style Selector="^ /template/ ContentPresenter#PART_HeaderPresenter">
+                                                <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            </Style>
                                         </ControlTheme>
                                     </TreeView.ItemContainerTheme>
                                     <TreeView.DataTemplates>
@@ -474,6 +376,13 @@
                                         </TreeDataTemplate>
                                         <DataTemplate DataType="vm:ProblemLeaf">
                                             <StackPanel Orientation="Horizontal" Background="Transparent">
+                                                <!-- On the leaf, not the tree, so group rows get no menu. Right-press
+                                                     selects the row first, so Ctrl+C afterwards copies the same item. -->
+                                                <StackPanel.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="_Copy" InputGesture="Ctrl+C" Click="OnCtxCopyProblemClick"/>
+                                                    </ContextMenu>
+                                                </StackPanel.ContextMenu>
                                                 <TextBlock Text="{Binding Glyph}"
                                                            Foreground="{Binding IconColor}"
                                                            Margin="0,0,6,0"
@@ -491,139 +400,95 @@
                             </Grid>
                             <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4"/>
                         </Grid>
-                    </TabItem>
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:NuGetTabViewModel">
+                        <Grid ColumnDefinitions="*,4,240" RowDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Package (current)" Margin="4"/>
+                            <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Margin="4">
+                                <TextBlock Text="Versions" VerticalAlignment="Center"/>
+                                <CheckBox Content="Prerelease" IsChecked="{Binding IncludePrerelease}" Margin="10,0,0,0"/>
+                            </StackPanel>
 
-                    <!-- Read-only observation of the OS-driven disk reconcile: it changes no behavior. Text-dense
-                         and deliberately chart-free.
+                            <ListBox Grid.Row="1" Grid.Column="0" Background="#000000"
+                                     AttachedToVisualTree="OnNuGetPackagesAttached"
+                                     ItemsSource="{Binding Packages}" SelectedItem="{Binding SelectedPackage}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate DataType="m:PackageEntry">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Grid.Column="0" Text="{Binding Id}"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding CurrentVersion}" Margin="8,0,0,0"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <GridSplitter Grid.Row="1" Grid.Column="1" Background="#2D2D30"/>
+                            <ListBox Grid.Row="1" Grid.Column="2" Background="#000000"
+                                     AttachedToVisualTree="OnNuGetVersionsAttached"
+                                     ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"/>
 
-                         Laid out for the shape this panel actually is — wide and short. The counters are
-                         fixed-width tiles in a WrapPanel, so they spend the abundant axis (horizontal) and
-                         reflow into fewer columns as the window narrows, instead of stacking into a tall gutter
-                         that scrolls while the right half sits empty. ItemWidth is the auto-repeating-column
-                         knob: WrapPanel gives CSS's `repeat(auto-fill, 190px)`, not `minmax(190px, 1fr)` —
-                         there is no stretch-to-fill, so the last column leaves a remainder. The real
-                         minmax analogue is ItemsRepeater + UniformGridLayout MinItemWidth, which needs an
-                         ItemsSource; these five tiles are heterogeneous static content, so it doesn't fit.
-
-                         The log then takes the full width of the star row: its rows are the widest thing here
-                         (time + kind + count + a path), and it's the part worth the space. -->
-                    <TabItem Header="Disk" x:Name="DiskTab">
-                        <Grid RowDefinitions="Auto,Auto,*" DataContext="{Binding DiskInsight}">
+                            <DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Margin="4">
+                                <Button DockPanel.Dock="Right" Content="Apply + Restore" Command="{Binding ApplyCommand}"/>
+                                <TextBlock Text="{Binding Status}" VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Grid>
+                    </DataTemplate>
+                    <!-- Read-only observation of SolutionWatcher; text-dense and chart-free. Counters on one line,
+                         then the reload log takes the rest: each row says which files caused a reload. -->
+                    <DataTemplate DataType="vm:FileWatcherTabViewModel">
+                        <Grid RowDefinitions="Auto,Auto,*">
                             <DockPanel Grid.Row="0" Margin="4">
                                 <Button DockPanel.Dock="Right" Content="Reset" Command="{Binding ResetCommand}"
                                         ToolTip.Tip="Rebase the counters and clear the log, to watch one burst"/>
-                                <Panel DockPanel.Dock="Left" Width="8" Height="8" Margin="0,0,6,0"
-                                       VerticalAlignment="Center">
-                                    <Ellipse Fill="#4EC9B0" IsVisible="{Binding IsWatching}"/>
-                                    <Ellipse Fill="#808080" IsVisible="{Binding !IsWatching}"/>
-                                </Panel>
                                 <TextBlock Text="{Binding WatchStatus}" VerticalAlignment="Center"
                                            TextTrimming="CharacterEllipsis"/>
                             </DockPanel>
-
-                            <WrapPanel Grid.Row="1" Margin="4,0,4,4" ItemWidth="190">
-                                <StackPanel Margin="0,0,12,8">
-                                    <TextBlock Text="Feed" FontWeight="Bold" Margin="0,0,0,2"/>
-                                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
-                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Events seen"/>
-                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding EventsSeen}"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Pruned"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding EventsPruned}"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Muted"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding EventsMuted}"/>
-                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Signals raised"/>
-                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SignalsRaised}"/>
-                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Overflows"/>
-                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Overflows}"/>
-                                    </Grid>
-                                </StackPanel>
-
-                                <StackPanel Margin="0,0,12,8">
-                                    <TextBlock Text="Reconcile funnel" FontWeight="Bold" Margin="0,0,0,2"/>
-                                    <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto,Auto">
-                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Stat'd"/>
-                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DocumentsStatted}"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Read"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DocumentsRead}"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ReadRatio}"
-                                                   Foreground="#808080" Margin="6,0,0,0"
-                                                   ToolTip.Tip="Read / stat'd — the stamp gate's payoff"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Forked"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DocumentsForked}"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding ForkRatio}"
-                                                   Foreground="#808080" Margin="6,0,0,0"
-                                                   ToolTip.Tip="Forked / read — content is the fork arbiter"/>
-                                    </Grid>
-                                </StackPanel>
-
-                                <StackPanel Margin="0,0,12,8">
-                                    <TextBlock Text="Modes" FontWeight="Bold" Margin="0,0,0,2"/>
-                                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
-                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Drains"/>
-                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Drains}"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Full rescans"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding FullRescans}"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Structural reloads"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding StructuralReloads}"/>
-                                    </Grid>
-                                </StackPanel>
-
-                                <StackPanel Margin="0,0,12,8">
-                                    <TextBlock Text="Pending overlay" FontWeight="Bold" Margin="0,0,0,2"/>
-                                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
-                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Paths"/>
-                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding PendingCount}"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Rescan queued"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding NeedsFullRescan}"/>
-                                    </Grid>
-                                    <!-- Capped: an agent burst can leave dozens of paths pending, and the band
-                                         must not grow to fit them and re-steal the log's height. -->
-                                    <ScrollViewer MaxHeight="52" Margin="0,2,0,0">
-                                        <TextBlock Text="{Binding PendingPaths}" Foreground="#808080"/>
-                                    </ScrollViewer>
-                                </StackPanel>
-
-                                <StackPanel Margin="0,0,12,8">
-                                    <TextBlock Text="Open tabs" FontWeight="Bold" Margin="0,0,0,2"/>
-                                    <ScrollViewer MaxHeight="70">
-                                        <TextBlock Text="{Binding StaleTabs}" Foreground="#808080"/>
-                                    </ScrollViewer>
-                                </StackPanel>
+                            <WrapPanel Grid.Row="1" Margin="4,0,4,4">
+                                <TextBlock Margin="0,0,24,0" ToolTip.Tip="Raw OS events under the solution folder, before filtering">
+                                    <Run Text="Events seen:" Foreground="#9A9AA0"/> <Run Text="{Binding EventsSeen}"/>
+                                </TextBlock>
+                                <TextBlock Margin="0,0,24,0" ToolTip.Tip="Events on a .sln, .slnx, .csproj, or launchSettings.json">
+                                    <Run Text="Relevant:" Foreground="#9A9AA0"/> <Run Text="{Binding EventsRelevant}"/>
+                                </TextBlock>
+                                <TextBlock Margin="0,0,24,0" ToolTip.Tip="Debounced bursts — each reloads the project list">
+                                    <Run Text="Reloads:" Foreground="#9A9AA0"/> <Run Text="{Binding Reloads}"/>
+                                </TextBlock>
+                                <TextBlock ToolTip.Tip="Times the OS dropped events (each still triggers a reload)">
+                                    <Run Text="Overflows:" Foreground="#9A9AA0"/> <Run Text="{Binding Overflows}"/>
+                                </TextBlock>
                             </WrapPanel>
-
-                            <ListBox Grid.Row="2" Background="#000000" Margin="4,0,4,4"
-                                     ItemsSource="{Binding Signals}">
+                            <ListBox Grid.Row="2" Background="#000000" ItemsSource="{Binding Bursts}">
                                 <ListBox.ItemTemplate>
-                                    <DataTemplate DataType="vm:DiskSignalRow">
-                                        <Grid ColumnDefinitions="Auto,Auto,Auto,*">
-                                            <TextBlock Grid.Column="0" Text="{Binding Time}" Foreground="#808080"/>
-                                            <TextBlock Grid.Column="1" Text="{Binding Kind}"
-                                                       Foreground="{Binding KindColor}" Margin="10,0,0,0"/>
-                                            <TextBlock Grid.Column="2" Text="{Binding Paths}" Margin="10,0,0,0"/>
-                                            <TextBlock Grid.Column="3" Text="{Binding Detail}" Margin="10,0,0,0"
-                                                       TextTrimming="CharacterEllipsis"/>
+                                    <DataTemplate DataType="vm:WatchBurstRow">
+                                        <Grid ColumnDefinitions="Auto,*">
+                                            <TextBlock Grid.Column="0" Text="{Binding Time}" Foreground="{Binding TimeColor}"
+                                                       FontFamily="Consolas,monospace" Margin="0,0,12,0"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding Detail}" TextWrapping="Wrap"/>
                                         </Grid>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>
                         </Grid>
-                    </TabItem>
-                </TabControl>
-
-                <!-- The band is exactly as tall as the tab-header strip, so centering the toggle inside it lines the
-                     glyph up with the tab labels. The strip shrinks with the row when collapsed, so the band has to
-                     follow — code-behind sets its Height in the same two methods that own the collapse state.
-                     (Binding this to a TabItem's Bounds doesn't work: the item keeps reporting its unclipped 48px
-                     while the row is 22, which pushes the button past the bar's bottom edge.) -->
-                <Grid x:Name="BottomPanelToggleBand"
-                      HorizontalAlignment="Right" VerticalAlignment="Top">
-                    <Button x:Name="BottomPanelToggle" Content="▾"
-                            VerticalAlignment="Center"
-                            Margin="0,0,6,0" Padding="4,0" MinHeight="0" MinWidth="0"
-                            ToolTip.Tip="Collapse panel"
-                            Click="OnToggleBottomPanelClick"/>
-                </Grid>
-            </Grid>
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:AboutTabViewModel">
+                        <ScrollViewer>
+                            <StackPanel Margin="32,24" MaxWidth="560" HorizontalAlignment="Left" Spacing="4">
+                                <TextBlock Text="{Binding Title}" FontSize="24" FontWeight="SemiBold"/>
+                                <TextBlock Text="by Ben Hendel-Doying" Foreground="#9A9AA0" Margin="0,0,0,16"/>
+                                <!-- HyperlinkButton hands the URI to the platform launcher (the default browser). -->
+                                <HyperlinkButton Content="View source code on GitHub" NavigateUri="{x:Static vm:AboutTabViewModel.SourceCodeUri}"/>
+                                <HyperlinkButton Content="Check out the games I make" NavigateUri="{x:Static vm:AboutTabViewModel.GamesUri}"/>
+                                <HyperlinkButton Content="Support me on Patreon" NavigateUri="{x:Static vm:AboutTabViewModel.PatreonUri}"/>
+                                <TextBlock TextWrapping="Wrap" Margin="0,16,0,0" Foreground="#DCDCDC"
+                                           Text="With agentic coding AI, many devs spend much less time writing code and much more time validating results. MiniIDE was built to help you do that."/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DataTemplate>
+                </TabControl.DataTemplates>
+            </TabControl>
         </Grid>
+
+        <Border Grid.Row="2" Background="#1E1E22" BorderThickness="0,1,0,0" BorderBrush="#40808080" Padding="8,2">
+            <TextBlock Text="{Binding Status}" Foreground="#9A9AA0" TextTrimming="CharacterEllipsis"/>
+        </Border>
     </Grid>
 </Window>

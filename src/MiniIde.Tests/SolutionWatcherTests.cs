@@ -1,4 +1,3 @@
-using MiniIde.Models;
 using MiniIde.Services;
 using Shouldly;
 using Xunit;
@@ -6,11 +5,8 @@ using Xunit;
 namespace MiniIde.Tests;
 
 /// <summary>Drives a real <see cref="FileSystemWatcher"/> over a real temp directory — the OS feed is the
-/// whole point, so faking it would test nothing. What is asserted is the classification the rest of the app
-/// depends on: which paths reach the signal at all (pruning, muting) and whether a burst is structural.
-///
-/// <para>The signal-driven half of the feature (tab live-push, tree refresh) needs a realized window and is a
-/// manual GUI item; this covers the service in isolation.</para></summary>
+/// whole point, so faking it would test nothing. What is asserted is the one decision the watcher makes: which
+/// changes can alter the project list (and so raise a signal) and which can't.</summary>
 public sealed class SolutionWatcherTests : IDisposable
 {
     // Generous: the OS's delivery lag plus the debounce window. A slow machine should not fail the run.
@@ -20,24 +16,26 @@ public sealed class SolutionWatcherTests : IDisposable
     // escapes at all escapes promptly.
     private static readonly TimeSpan SilenceWindow = TimeSpan.FromSeconds(1.5);
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     private readonly string _root;
     private readonly string _solutionPath;
     private readonly SolutionWatcher _watcher = new();
-    private readonly List<DiskChangeSignal> _signals = new();
+    private int _signals;
 
     public SolutionWatcherTests()
     {
         _root = Path.Combine(Path.GetTempPath(), "miniide-watch-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_root);
-        Directory.CreateDirectory(Path.Combine(_root, "obj"));
+        Directory.CreateDirectory(Path.Combine(_root, "Lib", "Properties"));
+        Directory.CreateDirectory(Path.Combine(_root, ".miniide"));
 
         _solutionPath = Path.Combine(_root, "Lib.slnx");
         File.WriteAllText(_solutionPath, "<Solution />");
-        File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { }");
-        File.WriteAllText(Path.Combine(_root, "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(_root, "Lib", "Code.cs"), "class Code { }");
+        File.WriteAllText(Path.Combine(_root, "Lib", "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
 
         // Everything above exists before the watch starts, so no fixture setup shows up as a signal.
-        _watcher.Changed += s => { lock (_signals) _signals.Add(s); };
+        _watcher.Changed += () => Interlocked.Increment(ref _signals);
         _watcher.Start(_solutionPath).ShouldBeTrue();
     }
 
@@ -47,147 +45,94 @@ public sealed class SolutionWatcherTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* temp dir; best effort */ }
     }
 
-    private async Task<DiskChangeSignal?> NextSignalAsync(TimeSpan timeout)
+    private async Task<bool> SignalArrivesWithinAsync(TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            lock (_signals)
-                if (_signals.Count > 0)
-                {
-                    var signal = _signals[0];
-                    _signals.RemoveAt(0);
-                    return signal;
-                }
-            await Task.Delay(25, TestContext.Current.CancellationToken);
+            if (Volatile.Read(ref _signals) > 0) return true;
+            await Task.Delay(25, Ct);
         }
-        return null;
+        return false;
+    }
+
+    [Theory]
+    [InlineData("Lib.slnx")]
+    [InlineData("Lib/Lib.csproj")]
+    [InlineData("Lib/Properties/launchSettings.json")]
+    [InlineData(".miniide/Lib.local.json")]
+    public async Task Signals_WhenAFileTheProjectListReadsChanges(string relative)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_root, relative), "<changed />", Ct);
+
+        (await SignalArrivesWithinAsync(SignalTimeout)).ShouldBeTrue();
     }
 
     [Fact]
-    public async Task Reports_AnEditedFile_AsANonStructuralChange()
+    public async Task Signals_WhenAProjectFileIsRenamed()
     {
-        var path = Path.Combine(_root, "Code.cs");
-        await File.WriteAllTextAsync(path, "class Code { int X; }", TestContext.Current.CancellationToken);
+        File.Move(Path.Combine(_root, "Lib", "Lib.csproj"), Path.Combine(_root, "Lib", "Renamed.csproj"));
 
-        var signal = await NextSignalAsync(SignalTimeout);
-
-        signal.ShouldNotBeNull();
-        signal.Paths.ShouldContain(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
-        // Content on an existing file is the cheap overlay path — it must not force a workspace rebuild.
-        signal.Structural.ShouldBeFalse();
-        signal.Overflow.ShouldBeFalse();
+        (await SignalArrivesWithinAsync(SignalTimeout)).ShouldBeTrue();
     }
 
     [Fact]
-    public async Task Reports_ANewFile_AsStructural_NamingItAsTheReason()
+    public async Task StaysQuiet_WhenOnlySourceFilesChange()
     {
-        // WithDocumentText can neither add nor remove a document, so this has to reach the consumer as
-        // "rebuild", not "overlay".
-        var added = Path.Combine(_root, "Added.cs");
-        await File.WriteAllTextAsync(added, "class Added { }", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(_root, "Lib", "Code.cs"), "class Code { int X; }", Ct);
+        await File.WriteAllTextAsync(Path.Combine(_root, "Lib", "New.cs"), "class New { }", Ct);
 
-        var signal = await NextSignalAsync(SignalTimeout);
-
-        signal.ShouldNotBeNull();
-        signal.Structural.ShouldBeTrue();
-
-        // The provenance the Disk panel exists to show: a bare Structural:true leaves "the tree just collapsed,
-        // why?" unanswerable.
-        signal.Reason.ShouldNotBeNull();
-        signal.Reason.Kind.ShouldBe(StructuralKind.Created);
-        signal.Reason.Path.ShouldBe(added, StringCompareShould.IgnoreCase);
-    }
-
-    [Fact]
-    public async Task Reports_NoReason_ForAContentOnlyChange()
-    {
-        await File.WriteAllTextAsync(
-            Path.Combine(_root, "Code.cs"), "class Code { int Y; }", TestContext.Current.CancellationToken);
-
-        var signal = await NextSignalAsync(SignalTimeout);
-
-        signal.ShouldNotBeNull();
-        // A reason exists exactly when the burst is structural — there is nothing to explain here.
-        signal.Structural.ShouldBeFalse();
-        signal.Reason.ShouldBeNull();
-    }
-
-    [Fact]
-    public async Task Reports_AnEditedProjectFile_AsStructural()
-    {
-        // Nothing was created or deleted — the file already exists, so this is a plain Changed event. But a
-        // .csproj decides what compiles, so it still has to reach the consumer as "rebuild", not "overlay".
-        await File.WriteAllTextAsync(
-            Path.Combine(_root, "Lib.csproj"),
-            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup /></Project>",
-            TestContext.Current.CancellationToken);
-
-        var signal = await NextSignalAsync(SignalTimeout);
-
-        signal.ShouldNotBeNull();
-        signal.Structural.ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task Ignores_WritesUnderPrunedDirectories()
-    {
-        // A build writes continuously into obj/. The tree and the manifest fingerprint both prune it, so a
-        // reconcile triggered by it would be pure churn.
-        await File.WriteAllTextAsync(
-            Path.Combine(_root, "obj", "Generated.cs"), "class Gen { }", TestContext.Current.CancellationToken);
-
-        (await NextSignalAsync(SilenceWindow)).ShouldBeNull();
-
-        // Counted, not just dropped: a silent watcher and a watcher whose every event is pruned look identical
-        // without this, which is exactly the confusion the Disk panel exists to end.
-        var stats = _watcher.Snapshot();
-        stats.EventsPruned.ShouldBeGreaterThan(0);
-        stats.SignalsRaised.ShouldBe(0);
-    }
-
-    [Fact]
-    public async Task Ignores_MutedSelfWrites_ButNotALaterExternalEdit()
-    {
-        var path = Path.Combine(_root, "Code.cs");
-        _watcher.MuteWrites(new[] { path });
-
-        await File.WriteAllTextAsync(path, "class Code { int Muted; }", TestContext.Current.CancellationToken);
-
-        (await NextSignalAsync(SilenceWindow)).ShouldBeNull();
-
-        var stats = _watcher.Snapshot();
-        stats.EventsMuted.ShouldBeGreaterThan(0);
-        stats.SignalsRaised.ShouldBe(0);
-    }
-
-    [Fact]
-    public void Reports_TheLiveWatchAndItsRoot()
-    {
-        // DiskIsWatched degrading to false is a silent failure mode — the app polls forever with nothing on
-        // screen to say so. The panel reads it from here.
-        var stats = _watcher.Snapshot();
-
-        stats.IsWatching.ShouldBeTrue();
-        stats.Root.ShouldBe(_root, StringCompareShould.IgnoreCase);
-
-        _watcher.Stop();
-
-        _watcher.Snapshot().IsWatching.ShouldBeFalse();
+        (await SignalArrivesWithinAsync(SilenceWindow)).ShouldBeFalse();
     }
 
     [Fact]
     public async Task Coalesces_ABurstIntoOneSignal()
     {
-        // An agent rewriting a directory must not become one reconcile per write.
-        for (var i = 0; i < 20; i++)
-            await File.WriteAllTextAsync(
-                Path.Combine(_root, $"Burst{i}.cs"), $"class Burst{i} {{ }}", TestContext.Current.CancellationToken);
+        var csproj = Path.Combine(_root, "Lib", "Lib.csproj");
+        for (var i = 0; i < 10; i++)
+            await File.WriteAllTextAsync(csproj, $"<Project Sdk=\"Microsoft.NET.Sdk\"><!-- {i} --></Project>", Ct);
 
-        var signal = await NextSignalAsync(SignalTimeout);
+        (await SignalArrivesWithinAsync(SignalTimeout)).ShouldBeTrue();
+        await Task.Delay(SilenceWindow, Ct);
+        Volatile.Read(ref _signals).ShouldBe(1);
+    }
 
-        signal.ShouldNotBeNull();
-        signal.Paths.Count.ShouldBeGreaterThan(1); // one signal carrying many paths, not many signals
-        (await NextSignalAsync(SilenceWindow)).ShouldBeNull();
+    [Theory]
+    [InlineData(@"C:\src\App.sln", true)]
+    [InlineData(@"C:\src\App.SLNX", true)]
+    [InlineData(@"C:\src\App\App.csproj", true)]
+    [InlineData(@"C:\src\App\Properties\launchSettings.json", true)]
+    [InlineData(@"C:\src\.miniide\App.local.json", true)]
+    [InlineData(@"C:\src\.miniide\App.local.json.tmp", false)]
+    [InlineData(@"C:\src\.miniide\.gitignore", false)]
+    [InlineData(@"C:\src\App\Program.cs", false)]
+    [InlineData(@"C:\src\App\appsettings.json", false)]
+    [InlineData(@"C:\src\App\obj\App.csproj.nuget.g.props", false)]
+    public void IsRelevant_MatchesOnlyWhatTheProjectListReads(string path, bool expected) =>
+        SolutionWatcher.IsRelevant(path).ShouldBe(expected);
+
+    [Fact]
+    public async Task Snapshot_CountsWhatItSaw_AndLogsTheCause()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_root, "Lib", "Code.cs"), "class Code { int X; }", Ct);
+        var csproj = Path.Combine(_root, "Lib", "Lib.csproj");
+        await File.WriteAllTextAsync(csproj, "<Project Sdk=\"Microsoft.NET.Sdk\"><!-- x --></Project>", Ct);
+
+        (await SignalArrivesWithinAsync(SignalTimeout)).ShouldBeTrue();
+        var stats = _watcher.Snapshot();
+
+        stats.Root.ShouldBe(_root);
+        stats.Reloads.ShouldBe(1);
+        stats.EventsRelevant.ShouldBeGreaterThan(0);
+        stats.EventsSeen.ShouldBeGreaterThan(stats.EventsRelevant); // the .cs write was seen but filtered
+        stats.RecentBursts.ShouldHaveSingleItem().Paths.ShouldBe([csproj]);
+    }
+
+    [Fact]
+    public void Snapshot_HasNoRoot_AfterStop()
+    {
+        _watcher.Stop();
+
+        _watcher.Snapshot().Root.ShouldBeNull();
     }
 }

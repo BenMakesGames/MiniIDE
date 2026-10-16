@@ -10,20 +10,16 @@ Or direct: `dotnet run --project src/MiniIde`.
 
 ## Shortcuts
 - Ctrl+O — Open solution (.slnx or .sln)
-- Ctrl+S — Save active tab
-- Ctrl+Shift+F — Focus Find box
-- F5 — Play (dotnet run startup project)
 - F12 — Go to Definition (triggers workspace load on first use)
-- Shift+F12 — Find References (same)
 
 ## First-run flow
 1. Ctrl+O → pick .slnx.
-2. Solution tree left. Double-click project → files load. Double-click .cs → editor tab.
-3. Ctrl+Shift+F → type, Enter. Regex checkbox optional.
-4. NuGet tab: pick project → package → version → Apply + Restore.
-5. Startup dropdown → Play.
+2. Left panel: one card per project. ▶ Run runs it; ▿ picks the configuration (default Debug) and launch profile.
+3. Each live run gets a button on its card → reopens its tab. Closing a run tab does **not** stop it; the tab's ■ Stop does.
+4. Right-click a card → Find problems (project-scoped errors/warnings tab) or Manage NuGet packages.
+5. Problems tab: double-click a diagnostic → opens the file at that line.
 
 ## Design gotchas
-- MSBuildWorkspace loads lazily — first F12 / Shift+F12 will be slow (seconds to minutes).
-- Global find shells `rg` (must be on PATH).
+- MSBuildWorkspace loads lazily — the first F12 / Find problems will be slow (seconds to minutes).
 - `.slnx` requires Roslyn 5.6.0+ (pinned).
+- Closing the IDE kills every live run, including those whose tabs were closed.

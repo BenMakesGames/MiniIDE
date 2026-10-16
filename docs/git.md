@@ -18,12 +18,10 @@ stage, commit, diff, blame, or ahead/behind anywhere.
 
 ## Why the state is polled, never signalled
 
-- `.git` is in `IdeDirectories.Pruned` and **stays there**. `SolutionWatcher.IsPruned` tests every segment of
-  the relative path, so the `.git` node itself is pruned, not merely its contents.
-- ⇒ no repository creation or deletion can ever arrive as a `DiskChangeSignal`. Anything subscribing to
-  `Watcher.Changed` to learn repo state is dead code.
-- It stays pruned because a `git pull` writes hundreds of files under `.git` (objects, refs, index, logs);
-  feeding those to the watcher turns every fetch into a structural-signal storm and a tree rebuild per burst.
+- `SolutionWatcher` only reacts to solution/project/launch-settings files (`docs/disk-watching.md`), so no
+  repository creation or deletion can ever arrive as a signal. Anything subscribing to `Watcher.Changed` to
+  learn repo state is dead code.
+- Don't widen it to `.git`: a `git pull` writes hundreds of files there (objects, refs, index, logs).
 - So `MainWindowViewModel.RefreshGitState` is called at exactly three moments: solution open, window
   activation (`RefreshFromDiskAsync`), and our own successful `git init`.
 - Focus-time is the agreed granularity for external changes — a `git init` in a terminal shows up on the next
@@ -68,7 +66,5 @@ is worse than a greyed button. Every disabled state carries a reason-specific to
 
 ## Side effects
 
-A pull's incoming files reach the watcher as an ordinary structural signal and rebuild the tree — expected,
-and `LoadTreeAsync`'s `Tree.Clear()` resets expansion and scroll along with it. That is
-`docs/tickets/incremental-solution-tree-refresh.md`, not a git bug. The pull is deliberately **not** muted via
-`SolutionWatcher.MuteWrites`: muting is only for writes that refresh the view themselves.
+A pull that changes a solution or project file reaches the watcher and reloads the project list — cards
+update in place, so selections and run buttons survive it.

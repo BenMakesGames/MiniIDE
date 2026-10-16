@@ -7,8 +7,8 @@ namespace MiniIde.ViewModels;
 
 public enum ProblemGrouping { ByFile, ByCode }
 
-/// <summary>A top-level tree node in the Problems panel — a file (by-file mode) or a diagnostic code
-/// (by-code mode). Built wholesale by <c>ProblemsViewModel.RebuildTree</c>; immutable thereafter.</summary>
+/// <summary>A top-level tree node in a Problems tab — a file (by-file mode) or a diagnostic code
+/// (by-code mode). Built wholesale by <c>ProblemsTabViewModel.RebuildTree</c>; immutable thereafter.</summary>
 public sealed class ProblemGroup
 {
     public ProblemGroup(string header, IReadOnlyList<ProblemLeaf> children, bool hasError, string sortKey)

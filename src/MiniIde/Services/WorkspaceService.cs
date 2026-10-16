@@ -14,7 +14,7 @@ using MiniIde.Models;
 
 namespace MiniIde.Services;
 
-/// <summary>The Roslyn semantic layer: go-to-definition, find-references, and compiler diagnostics.
+/// <summary>The Roslyn semantic layer: go-to-definition, rename, and compiler diagnostics.
 ///
 /// <para>All reads go through the private <see cref="_solution"/> snapshot, never <c>_ws.CurrentSolution</c>.
 /// That is deliberate and load-bearing — it lets <see cref="ReconcileWithDiskAsync"/> reflect the
@@ -38,80 +38,6 @@ public class WorkspaceService : IDisposable
     // matches cannot have been read into a different snapshot, so the reconcile skips it without reading.
     // Only ever touched under _lock (load / reconcile).
     private readonly Dictionary<string, FileStamp> _stamps = new(StringComparer.OrdinalIgnoreCase);
-
-    // The dirty track the disk watcher pushes into: paths known-changed since the last reconcile, plus the
-    // "rescan everything" flag. Guarded by its own plain lock, not _lock — the watcher signals from a
-    // threadpool thread and must never block behind a running reconcile.
-    private readonly object _dirtyGate = new();
-    private readonly HashSet<string> _pending = new(StringComparer.OrdinalIgnoreCase);
-    private bool _needsFullRescan = true;
-
-    // Read-only observation counters. They get their own plain gate rather than riding _lock: an observer on
-    // the UI thread must be able to read them without blocking behind a running reconcile, and _lock is an
-    // async semaphore no synchronous reader can politely take. Incremented in funnel order, so Read <= Statted
-    // and Forked <= Read hold for any snapshot taken between two increments.
-    private readonly object _countersGate = new();
-    private long _docsStatted, _docsRead, _docsForked, _drains, _fullRescans, _structuralReloads;
-
-    private void Count(ref long counter)
-    {
-        lock (_countersGate) counter++;
-    }
-
-    /// <summary>A single consistent read of the reconcile's since-start counters, for observation only. Costs
-    /// no I/O and cannot block on a reconcile. Cumulative since app start; a reader wanting one burst subtracts
-    /// its own baseline.</summary>
-    public ReconcileStats Stats()
-    {
-        lock (_countersGate)
-            return new ReconcileStats(_docsStatted, _docsRead, _docsForked, _drains, _fullRescans, _structuralReloads);
-    }
-
-    /// <summary>What the reconcile currently owes: the undrained pending paths and the full-rescan flag. The
-    /// path list is a copy — handing out the live set would let an observer mutate a dirty track.</summary>
-    public DiskDirtyState Dirty()
-    {
-        lock (_dirtyGate) return new DiskDirtyState(_pending.ToArray(), _needsFullRescan);
-    }
-
-    /// <summary>Whether an OS file-change feed is driving <see cref="MarkPathsChanged"/> — set by the owner
-    /// when a <see cref="SolutionWatcher"/> is actually running. While false the reconcile can trust no
-    /// pending-set, so it full-rescans every time: exactly the pre-watcher behavior (plus the stamp gate).
-    /// This is what keeps the view correct if the watcher never started.</summary>
-    public bool DiskIsWatched { get; set; }
-
-    /// <summary>Whether the (expensive) MSBuild snapshot has been built yet. Lets focus-time reconciliation
-    /// stay a no-op until the first semantic query has paid the cold-start — focus must never trigger it.</summary>
-    public bool IsLoaded => _solution is not null;
-
-    /// <summary>Records that <paramref name="paths"/> changed on disk, so the next reconcile overlays them.
-    /// Cheap and non-blocking — the watcher calls it from a threadpool thread. Paths that aren't solution
-    /// documents are harmless (the drain ignores them).</summary>
-    public void MarkPathsChanged(IEnumerable<string> paths)
-    {
-        lock (_dirtyGate)
-            foreach (var p in paths) _pending.Add(Path.GetFullPath(p));
-    }
-
-    /// <summary>Forces the next reconcile to rescan the whole solution rather than drain the pending-set.
-    /// The recovery path for anything the pending-set can't express: a structural change (a document added or
-    /// removed — <c>WithDocumentText</c> can do neither), a watcher buffer overflow, or a cold start.</summary>
-    public void RequestFullRescan()
-    {
-        lock (_dirtyGate) _needsFullRescan = true;
-    }
-
-    private (bool Full, string[] Paths) DrainDirty()
-    {
-        lock (_dirtyGate)
-        {
-            var full = _needsFullRescan || !DiskIsWatched;
-            var paths = full ? Array.Empty<string>() : _pending.ToArray();
-            _pending.Clear();
-            _needsFullRescan = false;
-            return (full, paths);
-        }
-    }
 
     public async Task EnsureLoadedAsync(string solutionPath, CancellationToken ct = default)
     {
@@ -143,22 +69,19 @@ public class WorkspaceService : IDisposable
     }
 
     /// <summary>Brings the snapshot up to date with the authoritative disk. Every semantic query funnels
-    /// through here (before F12 / Shift+F12 / Problems), so the view is never frozen on stale text.
+    /// through here (go to definition, rename, Find problems), so the view is never frozen on stale text.
     ///
-    /// <para><b>Two modes.</b> Normally this drains the pending-set the disk watcher pushed into
-    /// (<see cref="MarkPathsChanged"/>) and overlays only those documents — O(changed), not O(solution). When
-    /// <see cref="RequestFullRescan"/> was called (cold start, a structural change, a watcher overflow) or no
-    /// watcher is running at all, it falls back to the whole-solution pass: the manifest fingerprint decides
-    /// structural drift, everything else goes through the (stamp-gated) overlay. The watcher makes that pass
-    /// rare; because <c>FileSystemWatcher</c> is best-effort, it can never replace it.</para>
+    /// <para>Always a whole-solution pass, and cheap because it is gated twice: the manifest fingerprint
+    /// decides structural drift, and every document goes through the stamp-gated overlay — a <c>stat</c> each,
+    /// a read only for files whose stamp moved. No feed of changed paths is needed or trusted.</para>
     ///
     /// <para><b>Structural drift</b> — a source file or project added/removed, or a project file edited —
     /// forces a real reload (<see cref="LoadSolutionAsync"/>), because <c>WithDocumentText</c> can neither add
     /// nor remove documents. <b>Text drift</b> — the same file set with changed contents — is folded in with a
     /// cheap in-memory <c>WithDocumentText</c> overlay (<see cref="OverlayDocumentAsync"/>).</para>
     ///
-    /// <para>No-op until <see cref="EnsureLoadedAsync"/> has run (focus must not trigger the cold start).
-    /// Never writes disk — reconciliation is strictly disk → view.</para></summary>
+    /// <para>No-op until <see cref="EnsureLoadedAsync"/> has run. Never writes disk — reconciliation is
+    /// strictly disk → view.</para></summary>
     public async Task ReconcileWithDiskAsync(CancellationToken ct = default)
     {
         if (_solution is null || _solutionPath is null) return;
@@ -168,37 +91,24 @@ public class WorkspaceService : IDisposable
         {
             if (_solution is null || _solutionPath is null) return;
 
-            // Drained under the lock, never before it: a concurrent caller must block here and then drain,
-            // rather than find an empty set and return early against a snapshot this reconcile hasn't
-            // finished updating. On failure the work is handed back as a full rescan rather than silently
-            // dropped — a drained-and-lost path would leave the snapshot stale forever.
-            var (full, paths) = DrainDirty();
-            if (!full)
-            {
-                Count(ref _drains);
-                foreach (var path in paths) await OverlayPathAsync(path, ct);
-                return;
-            }
-
-            Count(ref _fullRescans);
             var current = await ComputeManifestFingerprintAsync(_solutionPath, ct);
             if (!string.Equals(current, _manifestFingerprint, StringComparison.Ordinal))
             {
-                // Its own counter, not an inference: this is an MSBuildWorkspace teardown + rebuild, by far
-                // the most expensive thing the reconcile can do.
-                Count(ref _structuralReloads);
                 await LoadSolutionAsync(ct); // fresh snapshot already reflects disk; nothing left to overlay
                 return;
             }
-            await OverlayDiskTextAsync(ct);
+            // Iterating the snapshot captured here while OverlayDocumentAsync re-forks _solution is deliberate:
+            // a DocumentId survives the fork, so the ids collected from this pass stay addressable.
+            foreach (var project in _solution.Projects)
+                foreach (var doc in project.Documents)
+                    await OverlayDocumentAsync(doc, ct);
         }
-        catch { RequestFullRescan(); throw; }
         finally { _lock.Release(); }
     }
 
     /// <summary>Forces a full rebuild of the snapshot from disk regardless of drift — backs the explicit
-    /// "Reload solution" command so a user-invoked reload refreshes the semantic snapshot, not just the tree.
-    /// No-op if the workspace was never loaded (the first query will load it fresh anyway).</summary>
+    /// "Reload solution" command so a user-invoked reload refreshes the semantic snapshot, not just the project
+    /// list. No-op if the workspace was never loaded (the first query will load it fresh anyway).</summary>
     public async Task ReloadIfLoadedAsync(CancellationToken ct = default)
     {
         if (_solution is null || _solutionPath is null) return;
@@ -209,27 +119,6 @@ public class WorkspaceService : IDisposable
             await LoadSolutionAsync(ct);
         }
         finally { _lock.Release(); }
-    }
-
-    /// <summary>The whole-solution half of the disk-reflection overlay: offers every document to
-    /// <see cref="OverlayDocumentAsync"/>. This is the fallback pass — cold start, watcher overflow, or no
-    /// watcher at all — so it is O(documents) in <c>stat</c>s but only O(changed) in reads. Assumes the lock
-    /// is held.</summary>
-    private async Task OverlayDiskTextAsync(CancellationToken ct)
-    {
-        // Iterating the snapshot captured here while OverlayDocumentAsync re-forks _solution is deliberate:
-        // a DocumentId survives the fork, so the ids collected from this pass stay addressable.
-        foreach (var project in _solution!.Projects)
-            foreach (var doc in project.Documents)
-                await OverlayDocumentAsync(doc, ct);
-    }
-
-    // The pending-set half: one path the watcher reported changed. A path with no Roslyn document (a .md, a
-    // file outside the solution) is simply not ours to overlay.
-    private async Task OverlayPathAsync(string path, CancellationToken ct)
-    {
-        var doc = FindDocument(path);
-        if (doc is not null) await OverlayDocumentAsync(doc, ct);
     }
 
     /// <summary>Reflects one document's on-disk text into the snapshot, forking <see cref="_solution"/> via
@@ -256,18 +145,15 @@ public class WorkspaceService : IDisposable
         ct.ThrowIfCancellationRequested();
         if (doc.FilePath is null) return;
 
-        Count(ref _docsStatted);
         var stamp = FileStamp.For(doc.FilePath);
         if (stamp is null) return; // gone or unreadable: keep the last-known text rather than blanking it
         if (_stamps.TryGetValue(doc.FilePath, out var synced) && synced == stamp.Value) return;
 
-        Count(ref _docsRead);
         var updated = SourceText.From(await File.ReadAllTextAsync(doc.FilePath, ct));
         _stamps[doc.FilePath] = stamp.Value;
 
         var current = await doc.GetTextAsync(ct);
         if (current.ContentEquals(updated)) return;
-        Count(ref _docsForked);
         _solution = _solution!.WithDocumentText(doc.Id, updated);
     }
 
@@ -300,8 +186,8 @@ public class WorkspaceService : IDisposable
         return string.Join('\n', lines);
     }
 
-    // Recursive *.cs walk that skips the same build/VCS directories as the tree and search (IdeDirectories),
-    // so the manifest tracks the source set MSBuild's default glob would, and can't drift from the tree view.
+    // Recursive *.cs walk that skips the build/VCS directories in IdeDirectories, so the manifest tracks the
+    // source set MSBuild's default glob would.
     private static IEnumerable<string> EnumerateSourceFiles(string dir)
     {
         if (!Directory.Exists(dir)) yield break;
@@ -331,122 +217,8 @@ public class WorkspaceService : IDisposable
         return ToSourceLocation(loc.SourceTree!.FilePath, loc.GetLineSpan());
     }
 
-    /// <summary>
-    /// Returns the symbol's references (possibly empty when the symbol has none), or <c>null</c> when no
-    /// symbol resolves at <paramref name="position"/>. Callers use the null case to distinguish a genuine
-    /// "no symbol here" from a legitimate "symbol found, zero references."
-    /// </summary>
-    public async Task<IReadOnlyList<FindHit>?> FindReferencesAsync(
-        string filePath, int position, CancellationToken ct = default)
-    {
-        var symbol = await ResolveSymbolAsync(filePath, position, ct);
-        if (symbol is null) return null;
-
-        var results = new List<FindHit>();
-        foreach (var reference in await SymbolFinder.FindReferencesAsync(symbol, _solution!, ct))
-            foreach (var loc in reference.Locations)
-            {
-                var span = loc.Location.GetLineSpan();
-                var text = await loc.Document.GetTextAsync(ct);
-                var lineText = text.Lines[span.StartLinePosition.Line].ToString();
-                results.Add(new FindHit(
-                    ToSourceLocation(loc.Location.SourceTree!.FilePath, span), lineText.Trim()));
-            }
-        return results;
-    }
-
-    /// <summary>
-    /// Returns the in-source symbols that <em>implement</em> or <em>override</em> the symbol at
-    /// <paramref name="position"/> (possibly empty), or <c>null</c> when no symbol resolves there. Unions two
-    /// queries so an abstract/virtual base member resolves to its overrides as well as an interface member to
-    /// its implementers: <c>SymbolFinder.FindImplementationsAsync</c> (interface types and interface members)
-    /// plus, when the caret symbol is itself an overridable member,
-    /// <c>SymbolFinder.FindOverridesAsync</c> (class-member overrides — which <c>FindImplementationsAsync</c>
-    /// does not cover). A concrete symbol simply yields an empty list.
-    /// <para>API (Roslyn <c>5.6.0</c>, <c>Microsoft.CodeAnalysis.Workspaces</c>):
-    /// <c>FindImplementationsAsync(ISymbol, Solution, IImmutableSet&lt;Project&gt;?, CancellationToken)</c> and
-    /// <c>FindOverridesAsync(ISymbol, Solution, IImmutableSet&lt;Project&gt;?, CancellationToken)</c>, both
-    /// returning <c>Task&lt;IEnumerable&lt;ISymbol&gt;&gt;</c>; <c>projects: null</c> searches the whole
-    /// solution.</para>
-    /// </summary>
-    public async Task<IReadOnlyList<FindHit>?> FindImplementationsAsync(
-        string filePath, int position, CancellationToken ct = default)
-    {
-        var symbol = await ResolveSymbolAsync(filePath, position, ct);
-        if (symbol is null) return null;
-
-        var found = new List<ISymbol>();
-        found.AddRange(await SymbolFinder.FindImplementationsAsync(symbol, _solution!, projects: null, ct));
-        // FindImplementationsAsync covers interface types/members only; overrides of an abstract/virtual class
-        // member come from FindOverridesAsync. Union both so a base method resolves to its overrides. Guard to
-        // member kinds: only members are overridable, and an interface/abstract *type* also reports IsAbstract —
-        // firing a needless whole-solution overrides scan (and passing a type where a member is expected).
-        if (symbol is IMethodSymbol or IPropertySymbol or IEventSymbol
-            && (symbol.IsAbstract || symbol.IsVirtual || symbol.IsOverride))
-            found.AddRange(await SymbolFinder.FindOverridesAsync(symbol, _solution!, projects: null, ct));
-
-        return await MapSymbolsToHitsAsync(found, ct);
-    }
-
-    /// <summary>
-    /// Returns the in-source derived types of the type at <paramref name="position"/> (transitively; possibly
-    /// empty), or <c>null</c> when no symbol resolves there. A class resolves to its derived classes; an
-    /// interface to its derived <em>interfaces</em> (its implementers belong to Go to Implementation, and
-    /// <c>FindDerivedClassesAsync</c> excludes interface implementations by design). A struct / enum / delegate
-    /// / record-struct — or anything that isn't a named type — has no subclasses and yields an empty list.
-    /// <para>API (Roslyn <c>5.6.0</c>): <c>FindDerivedClassesAsync(INamedTypeSymbol, Solution, bool transitive,
-    /// IImmutableSet&lt;Project&gt;?, CancellationToken)</c> and the parallel
-    /// <c>FindDerivedInterfacesAsync(...)</c>, both returning <c>Task&lt;IEnumerable&lt;INamedTypeSymbol&gt;&gt;</c>;
-    /// <c>transitive: true</c> walks the whole tree, <c>projects: null</c> the whole solution.</para>
-    /// </summary>
-    public async Task<IReadOnlyList<FindHit>?> FindSubclassesAsync(
-        string filePath, int position, CancellationToken ct = default)
-    {
-        var symbol = await ResolveSymbolAsync(filePath, position, ct);
-        if (symbol is null) return null;
-
-        IEnumerable<ISymbol> derived;
-        if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Class } cls)
-            derived = await SymbolFinder.FindDerivedClassesAsync(
-                cls, _solution!, transitive: true, projects: null, cancellationToken: ct);
-        else if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
-            derived = await SymbolFinder.FindDerivedInterfacesAsync(
-                iface, _solution!, transitive: true, projects: null, cancellationToken: ct);
-        else
-            derived = Array.Empty<ISymbol>();
-
-        return await MapSymbolsToHitsAsync(derived, ct);
-    }
-
-    // Maps result symbols to in-source FindHits: each symbol's IsInSource locations become a hit (line text for
-    // the preview, mirroring FindReferencesAsync; ToSourceLocation for the position), deduped on identical
-    // SourceLocation. Metadata/decompiled locations are skipped, so a framework implementer contributes nothing.
-    // A partial type legitimately yields several locations — that's fine, they're distinct positions.
-    private async Task<IReadOnlyList<FindHit>> MapSymbolsToHitsAsync(
-        IEnumerable<ISymbol> symbols, CancellationToken ct)
-    {
-        var results = new List<FindHit>();
-        var seen = new HashSet<SourceLocation>();
-        foreach (var symbol in symbols)
-        {
-            if (symbol is null) continue;
-            foreach (var loc in symbol.Locations)
-            {
-                if (!loc.IsInSource || loc.SourceTree is null) continue;
-                var span = loc.GetLineSpan();
-                var location = ToSourceLocation(loc.SourceTree.FilePath, span);
-                if (!seen.Add(location)) continue;
-                var text = await loc.SourceTree.GetTextAsync(ct);
-                var line = span.StartLinePosition.Line;
-                var preview = line < text.Lines.Count ? text.Lines[line].ToString().Trim() : string.Empty;
-                results.Add(new FindHit(location, preview));
-            }
-        }
-        return results;
-    }
-
     /// <summary>The symbol referenced or declared at <paramref name="position"/>, or null when the file isn't
-    /// in the solution or nothing resolves there. Shared by go-to-definition, find-references, and the rename
+    /// in the solution or nothing resolves there. Shared by go-to-definition and the rename
     /// path so none of them can disagree about what "the symbol under the caret" means — all resolve against
     /// the same fresh-disk <see cref="_solution"/> snapshot.</summary>
     public async Task<ISymbol?> ResolveSymbolAsync(string filePath, int position, CancellationToken ct = default)
@@ -491,17 +263,22 @@ public class WorkspaceService : IDisposable
     }
 
     /// <summary>
-    /// Compiles every project in the loaded solution and returns its Error + Warning compiler diagnostics as
-    /// <see cref="ProblemItem"/>s. Info/Hidden and pragma-suppressed diagnostics are excluded; duplicates
-    /// (same id+severity+message+location, e.g. from a multi-targeted project's per-TFM compilations) are
-    /// collapsed. Returns empty when no solution is loaded. Compilation is the expensive step and may be slow
-    /// on a first, cold load — it runs off the UI thread, honors <paramref name="ct"/> between projects, and
-    /// reports per-project progress via the <see cref="Progress"/> event.
+    /// Compiles <paramref name="projectPath"/>'s project and returns its Error + Warning compiler diagnostics as
+    /// <see cref="ProblemItem"/>s. A multi-targeted project is several Roslyn projects sharing one file path;
+    /// all of them are analyzed. Info/Hidden and pragma-suppressed diagnostics are excluded; duplicates (same
+    /// id+severity+message+location, e.g. from the per-TFM compilations) are collapsed. Returns empty when no
+    /// solution is loaded or the project isn't in it. Compilation is the expensive step and may be slow on a
+    /// first, cold load — it runs off the UI thread, honors <paramref name="ct"/> between compilations, and
+    /// reports progress via the <see cref="Progress"/> event.
     /// </summary>
-    public Task<IReadOnlyList<ProblemItem>> GetDiagnosticsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<ProblemItem>> GetDiagnosticsAsync(string projectPath, CancellationToken ct = default)
     {
         var solution = _solution;
         if (solution is null) return Task.FromResult<IReadOnlyList<ProblemItem>>(System.Array.Empty<ProblemItem>());
+        var full = Path.GetFullPath(projectPath);
+        var projects = solution.Projects
+            .Where(p => string.Equals(p.FilePath, full, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
         // Task.Run, not a bare async method: Roslyn's GetCompilationAsync does its binding work on the calling
         // thread, so awaiting it from the UI thread freezes the window for the whole analysis — and, worse,
@@ -513,7 +290,7 @@ public class WorkspaceService : IDisposable
             // ProblemItem is a record: structural equality already defines "the same diagnostic", so the
             // set does the de-duplication with no hand-rolled key to keep in sync with the record's fields.
             var seen = new HashSet<ProblemItem>();
-            foreach (var project in solution.Projects)
+            foreach (var project in projects)
             {
                 ct.ThrowIfCancellationRequested();
                 Progress?.Invoke($"Analyzing {project.Name}");

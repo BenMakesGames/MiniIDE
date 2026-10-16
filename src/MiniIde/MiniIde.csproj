@@ -19,6 +19,14 @@
     <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
 
+  <!-- Version = build time in UTC: year . day of year (1-366) . minute of day (0-1439). Every part fits the
+       65535 cap on assembly-version components. The clock is read ONCE into _BuildTicks and every part derived
+       from that, so a build straddling midnight can't pair one day's year/day with the next day's minute. -->
+  <PropertyGroup>
+    <_BuildTicks>$([System.DateTime]::UtcNow.Ticks)</_BuildTicks>
+    <Version>$([System.DateTime]::FromBinary($(_BuildTicks)).Year).$([System.DateTime]::FromBinary($(_BuildTicks)).DayOfYear).$([MSBuild]::Add($([MSBuild]::Multiply($([System.DateTime]::FromBinary($(_BuildTicks)).Hour), 60)), $([System.DateTime]::FromBinary($(_BuildTicks)).Minute)))</Version>
+  </PropertyGroup>
+
   <Target Name="RemoveNativePdbs" AfterTargets="Publish">
     <ItemGroup>
       <_PdbToDelete Include="$(PublishDir)**\*.pdb" />
@@ -51,10 +59,6 @@
       <Content Remove="@(Content)" Condition="$([System.String]::Copy('%(Identity)').Contains('BuildHost-net472'))" />
     </ItemGroup>
   </Target>
-
-  <ItemGroup>
-    <ProjectReference Include="..\BenMakesGames.FileGrepper\BenMakesGames.FileGrepper.csproj" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.0" />

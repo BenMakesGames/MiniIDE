@@ -32,12 +32,19 @@ public partial class OutputTabViewModel : DocumentTabViewModel
 
     private RunSession? _run;
 
-    public OutputTabViewModel(string tabId, string header, Action<OutputTabViewModel>? start = null)
+    /// <param name="buttonLabel">What this run's button on its project card reads. Only meaningful with a
+    /// <paramref name="start"/>; defaults to the header.</param>
+    public OutputTabViewModel(string tabId, string header, Action<OutputTabViewModel>? start = null, string? buttonLabel = null)
         : base(tabId, filePath: null, new TextDocument())
     {
         _header = header;
         _start = start;
+        ButtonLabel = buttonLabel ?? header;
     }
+
+    /// <summary>The short name a project card's run button shows for this tab — the selection and, from a
+    /// project's second run on, its number. The full header is the button's tooltip.</summary>
+    public string ButtonLabel { get; }
 
     /// <summary>Whether this tab is a run tab at all. Constant for the tab's life — deliberately not "a run is
     /// currently attached", so the strip neither waits for the first process nor vanishes (and reflows the
@@ -78,8 +85,9 @@ public partial class OutputTabViewModel : DocumentTabViewModel
         _ = MarkExitedAsync(run);
     }
 
-    /// <summary>Stops this tab's run if it has one still going; a no-op otherwise. The close and shutdown
-    /// paths call it unconditionally on every output tab, so it guards rather than relying on
+    /// <summary>Stops this tab's run if it has one still going; a no-op otherwise. Closing the tab does not call
+    /// this — a run outlives its tab and only this tab's Stop (or the IDE shutting down) ends it. Shutdown calls
+    /// it on every live run, so it guards rather than relying on
     /// <see cref="CanStopRun"/>, which only gates the button.</summary>
     [RelayCommand(CanExecute = nameof(CanStopRun))]
     public void StopRun()

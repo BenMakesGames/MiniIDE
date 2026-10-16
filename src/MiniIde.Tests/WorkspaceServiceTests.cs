@@ -1,4 +1,4 @@
-using Microsoft.Build.Locator;
+using MiniIde.Models;
 using MiniIde.Services;
 using Shouldly;
 using Xunit;
@@ -16,8 +16,8 @@ namespace MiniIde.Tests;
 public sealed class WorkspaceServiceTests : IAsyncLifetime
 {
     // A minimal but real solution on disk: MSBuildWorkspace needs to actually evaluate and restore something.
-    // Two source files, because the pending-set cases turn on one document being drained while another is not.
-    private sealed record Fixture(string Root, string SolutionPath, string SourcePath, string OtherPath);
+    // Two source files, so a test can edit the one it isn't navigating from.
+    private sealed record Fixture(string Root, string SolutionPath, string ProjectPath, string SourcePath, string OtherPath);
 
     // Per-test cancellation: a wedged MSBuild load should fail the test, not hang the run.
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -27,8 +27,6 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        if (!MSBuildLocator.IsRegistered) MSBuildLocator.RegisterDefaults();
-
         var root = Path.Combine(Path.GetTempPath(), "miniide-ws-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
 
@@ -57,7 +55,7 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
             </Solution>
             """);
 
-        _fx = new Fixture(root, sln, source, other);
+        _fx = new Fixture(root, sln, csproj, source, other);
         _workspace = new WorkspaceService();
         await _workspace.EnsureLoadedAsync(sln);
     }
@@ -105,8 +103,8 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
         }
         """;
 
-    // A second document calling into Code.Target(), so a reference to it can be located per-file: the line it
-    // reports is how a test observes whether *this* document was reconciled.
+    // A second document calling into Code.Target(). Navigating from its call site is how a test observes whether
+    // *this* document was reconciled: against stale text, an offset into the edited text misses the call.
     private const string OtherOriginal = """
         namespace Lib;
 
@@ -125,18 +123,6 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
             public static int Ping() => Code.Target();
         }
         """;
-
-    private static int OffsetOfDeclaration(string text) =>
-        text.IndexOf("Target() => 42", StringComparison.Ordinal);
-
-    // The line Other.cs's call to Target() currently resolves to, per the snapshot.
-    private async Task<int> OtherCallSiteLineAsync()
-    {
-        var references = await _workspace.FindReferencesAsync(_fx.SourcePath, OffsetOfDeclaration(Original), Ct);
-        references.ShouldNotBeNull();
-        return references.Single(r => Path.GetFullPath(r.Location.File) == Path.GetFullPath(_fx.OtherPath))
-            .Location.Line;
-    }
 
     private static int OffsetOfCallSite(string text) =>
         text.IndexOf("Target();", StringComparison.Ordinal);
@@ -193,9 +179,8 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
     [Fact]
     public async Task Reconcile_IsANoOpForTextThatAlreadyMatches()
     {
-        // Nothing changed on disk, so the snapshot already matches. Reconciling twice must fork nothing (a
-        // needless WithDocumentText would invalidate the cached compilation, turning warm queries cold) and
-        // leave the results identical.
+        // Nothing changed on disk, so the snapshot already matches. Reconciling twice must leave the results
+        // identical.
         await _workspace.ReconcileWithDiskAsync(Ct);
         await _workspace.ReconcileWithDiskAsync(Ct);
 
@@ -211,8 +196,8 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
         var readme = Path.Combine(_fx.Root, "README.md");
         await File.WriteAllTextAsync(readme, "# not a document Roslyn knows about", Ct);
 
-        // A .md is not a Roslyn document and not a .cs, so the disk-driven reconcile neither overlays it nor
-        // treats it as structural drift — it is ignored without throwing.
+        // A .md is not a Roslyn document and not a .cs, so the reconcile neither overlays it nor treats it as
+        // structural drift — it is ignored without throwing.
         await Should.NotThrowAsync(() => _workspace.ReconcileWithDiskAsync(Ct));
     }
 
@@ -220,87 +205,40 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
     public async Task Reconcile_PicksUpAnExternallyAddedFile()
     {
         // Structural drift: an external tool added a whole new source file to the project. WithDocumentText
-        // cannot add a document, so the reconcile must notice and rebuild — after which the new file's call
-        // site to Target() is a genuine reference.
-        var added = Path.Combine(_fx.Root, "More.cs");
-        await File.WriteAllTextAsync(added, """
+        // cannot add a document, so the reconcile must notice and rebuild — after which the new file is a
+        // document whose call to Target() resolves.
+        const string more = """
             namespace Lib;
 
             public static class More
             {
                 public static int Use() => Code.Target();
             }
-            """, Ct);
+            """;
+        var added = Path.Combine(_fx.Root, "More.cs");
+        await File.WriteAllTextAsync(added, more, Ct);
 
         await _workspace.ReconcileWithDiskAsync(Ct);
 
-        var declarationOffset = Original.IndexOf("Target() => 42", StringComparison.Ordinal);
-        var references = await _workspace.FindReferencesAsync(_fx.SourcePath, declarationOffset, Ct);
-
-        references.ShouldNotBeNull();
-        references.ShouldContain(r => Path.GetFullPath(r.Location.File) == Path.GetFullPath(added));
-
-        // An MSBuildWorkspace teardown + rebuild is the most expensive thing the reconcile does, so it gets
-        // its own number rather than being inferred from the mode counts.
-        _workspace.Stats().StructuralReloads.ShouldBe(1);
+        var definition = await _workspace.GoToDefinitionAsync(added, OffsetOfCallSite(more), Ct);
+        definition.ShouldNotBeNull();
+        definition.File.ShouldBe(_fx.SourcePath);
     }
 
     [Fact]
-    public async Task Reconcile_WhenNothingChanged_StatsWithoutReading()
+    public async Task Reconcile_PicksUpAnEditToEveryDocument()
     {
-        // The stamp gate asserted directly on the mechanism, rather than inferred from "the answer didn't
-        // change". This is the whole thesis of the reconcile: idle focus costs stats, not reads.
-        await _workspace.ReconcileWithDiskAsync(Ct); // the first pass reads and stamps every document
-        var before = _workspace.Stats();
-
+        // No one tells the workspace which file changed: every reconcile is a whole-solution, stamp-gated pass,
+        // so an edit to any document is reflected — here, the one that isn't being navigated from.
         await _workspace.ReconcileWithDiskAsync(Ct);
-
-        var after = _workspace.Stats();
-        after.DocumentsStatted.ShouldBeGreaterThan(before.DocumentsStatted);
-        after.DocumentsRead.ShouldBe(before.DocumentsRead);
-    }
-
-    [Fact]
-    public async Task Reconcile_WhenContentIsRewrittenIdentically_ReadsWithoutForking()
-    {
-        await _workspace.ReconcileWithDiskAsync(Ct);
-        var before = _workspace.Stats();
-
-        // Same bytes, new mtime — an operation-write that meant nothing. The stamp earns it a read; content is
-        // what decides, so nothing forks. (A fork would bust the cached compilation, turning a warm query cold.)
-        await File.WriteAllTextAsync(_fx.SourcePath, Original, Ct);
-
-        await _workspace.ReconcileWithDiskAsync(Ct);
-
-        var after = _workspace.Stats();
-        after.DocumentsRead.ShouldBe(before.DocumentsRead + 1);
-        after.DocumentsForked.ShouldBe(before.DocumentsForked);
-    }
-
-    [Fact]
-    public async Task Reconcile_KeepsTheFunnelInternallyConsistent()
-    {
-        // A mixed sequence over both modes: cold-start rescan, a pending-set drain, a forced full rescan, and
-        // a drain of an empty set.
-        _workspace.DiskIsWatched = true;
-        await _workspace.ReconcileWithDiskAsync(Ct);
-
-        await File.WriteAllTextAsync(_fx.SourcePath, Edited, Ct);
-        _workspace.MarkPathsChanged(new[] { _fx.SourcePath });
-        await _workspace.ReconcileWithDiskAsync(Ct);
-
         await File.WriteAllTextAsync(_fx.OtherPath, OtherEdited, Ct);
-        _workspace.RequestFullRescan();
-        await _workspace.ReconcileWithDiskAsync(Ct);
 
         await _workspace.ReconcileWithDiskAsync(Ct);
 
-        var stats = _workspace.Stats();
-        stats.DocumentsRead.ShouldBeLessThanOrEqualTo(stats.DocumentsStatted);
-        stats.DocumentsForked.ShouldBeLessThanOrEqualTo(stats.DocumentsRead);
-        stats.DocumentsForked.ShouldBeGreaterThan(0); // i.e. the invariant didn't hold vacuously at zero
-        stats.Drains.ShouldBe(2);
-        stats.FullRescans.ShouldBe(2);
+        // The caret offset is into the EDITED text; against a stale snapshot it would land a line too early.
+        var definition = await _workspace.GoToDefinitionAsync(_fx.OtherPath, OffsetOfCallSite(OtherEdited), Ct);
+        definition.ShouldNotBeNull();
+        definition.Line.ShouldBe(LineOf(Original, "public static int Target()"));
     }
 
     [Fact]
@@ -310,7 +248,6 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
         // of it, so the first reconcile after a load reads everything.
         await _workspace.ReconcileWithDiskAsync(Ct);
         var stamp = File.GetLastWriteTimeUtc(_fx.SourcePath);
-        var before = _workspace.Stats();
 
         // Rewrite with genuinely different content, then restore the mtime. Swapped is the same byte length,
         // so (LastWriteTimeUtc, Length) is now identical to what was last synced and the stat says "untouched".
@@ -319,13 +256,9 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
 
         await _workspace.ReconcileWithDiskAsync(Ct);
 
-        // The mechanism, alongside the outcome below: nothing was read at all.
-        _workspace.Stats().DocumentsRead.ShouldBe(before.DocumentsRead);
-
         // The file was never read, so the snapshot still answers from Original. This asserts the *limitation*
         // as much as the optimization: a content change preserving BOTH mtime AND length is invisible to the
-        // fallback poll. In the running app the watcher fires on the write itself regardless of mtime/size, so
-        // this double-coincidence is caught in the primary path — see FileStamp's remarks.
+        // reconcile — see FileStamp's remarks.
         var definition = await _workspace.GoToDefinitionAsync(_fx.SourcePath, OffsetOfCallSite(Original), Ct);
 
         definition.ShouldNotBeNull();
@@ -335,99 +268,26 @@ public sealed class WorkspaceServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Reconcile_LeavesContentUnforkedWhenOnlyTheStampMoved()
+    public async Task GetDiagnostics_ReportsTheRequestedProjectsErrors()
     {
-        await _workspace.ReconcileWithDiskAsync(Ct);
-        var before = _workspace.Stats();
-
-        // The stamp moves (new mtime) but the bytes are identical — an operation-write that touched a file
-        // without meaning anything. The stamp earns it a read; content is what decides, so nothing forks.
-        await File.WriteAllTextAsync(_fx.SourcePath, Original, Ct);
-
+        await File.WriteAllTextAsync(_fx.SourcePath, Original.Replace("=> 42;", "=> \"not an int\";"), Ct);
         await _workspace.ReconcileWithDiskAsync(Ct);
 
-        _workspace.Stats().DocumentsForked.ShouldBe(before.DocumentsForked);
+        var problems = await _workspace.GetDiagnosticsAsync(_fx.ProjectPath, Ct);
 
-        var definition = await _workspace.GoToDefinitionAsync(_fx.SourcePath, OffsetOfCallSite(Original), Ct);
-
-        definition.ShouldNotBeNull();
-        definition.Line.ShouldBe(LineOf(Original, "public static int Target()"));
+        problems.ShouldContain(p => p.Severity == ProblemSeverity.Error
+                                    && p.Location != null
+                                    && Path.GetFullPath(p.Location.File) == Path.GetFullPath(_fx.SourcePath));
     }
 
     [Fact]
-    public async Task Reconcile_WhenWatched_OverlaysThePendingSet()
+    public async Task GetDiagnostics_IsEmptyForAProjectOutsideTheSolution()
     {
-        _workspace.DiskIsWatched = true;
-        await _workspace.ReconcileWithDiskAsync(Ct); // drains the cold-start full rescan
-
-        await File.WriteAllTextAsync(_fx.OtherPath, OtherEdited, Ct);
-        _workspace.MarkPathsChanged(new[] { _fx.OtherPath });
-
+        await File.WriteAllTextAsync(_fx.SourcePath, Original.Replace("=> 42;", "=> \"not an int\";"), Ct);
         await _workspace.ReconcileWithDiskAsync(Ct);
 
-        (await OtherCallSiteLineAsync()).ShouldBe(LineOf(OtherEdited, "Ping()"));
-    }
+        var problems = await _workspace.GetDiagnosticsAsync(Path.Combine(_fx.Root, "Elsewhere.csproj"), Ct);
 
-    [Fact]
-    public async Task Reconcile_WhenWatched_LeavesUnreportedFilesAloneUntilAFullRescan()
-    {
-        _workspace.DiskIsWatched = true;
-        await _workspace.ReconcileWithDiskAsync(Ct);
-
-        // Other.cs changed but the watcher never told us — the event was dropped, or its buffer overran.
-        await File.WriteAllTextAsync(_fx.OtherPath, OtherEdited, Ct);
-        _workspace.MarkPathsChanged(new[] { _fx.SourcePath });
-
-        await _workspace.ReconcileWithDiskAsync(Ct);
-
-        // Drained only what was pending: the unreported edit is not reflected. This is the whole point of the
-        // optimization — and the whole reason the fallback below cannot be deleted.
-        (await OtherCallSiteLineAsync()).ShouldBe(LineOf(OtherOriginal, "Ping()"));
-
-        // ...and the overflow/focus recovery path finds it. RequestFullRescan is what the watcher's Error
-        // event and the focus safety-net both call.
-        _workspace.RequestFullRescan();
-        await _workspace.ReconcileWithDiskAsync(Ct);
-
-        (await OtherCallSiteLineAsync()).ShouldBe(LineOf(OtherEdited, "Ping()"));
-    }
-
-    [Fact]
-    public async Task Reconcile_WhenUnwatched_StillFullRescansEveryTime()
-    {
-        // DiskIsWatched stays false: the watcher never started (or couldn't). Nothing marks paths changed, so
-        // a pending-set drain would see an empty set forever and the view would freeze. The reconcile must
-        // full-rescan instead — the pre-watcher behavior, now stamp-gated.
-        await _workspace.ReconcileWithDiskAsync(Ct);
-        await File.WriteAllTextAsync(_fx.OtherPath, OtherEdited, Ct);
-
-        await _workspace.ReconcileWithDiskAsync(Ct);
-
-        (await OtherCallSiteLineAsync()).ShouldBe(LineOf(OtherEdited, "Ping()"));
-    }
-
-    [Fact]
-    public async Task FindReferences_ReturnsNullWhenNoSymbolResolves()
-    {
-        // A numeric literal binds to nothing. (Note how hard "no symbol" is to hit: a caret on `namespace Lib`
-        // resolves the namespace itself — which is why the UI gates these actions on the classification
-        // allowlist, not just on "is the caret over a word".)
-        var literalOffset = Original.IndexOf("42", StringComparison.Ordinal);
-
-        var references = await _workspace.FindReferencesAsync(_fx.SourcePath, literalOffset, Ct);
-
-        // Null is "no symbol here" — distinct from an empty list, which means "symbol found, zero references".
-        references.ShouldBeNull();
-    }
-
-    [Fact]
-    public async Task FindReferences_FindsTheCallSite()
-    {
-        var declarationOffset = Original.IndexOf("Target() => 42", StringComparison.Ordinal);
-
-        var references = await _workspace.FindReferencesAsync(_fx.SourcePath, declarationOffset, Ct);
-
-        references.ShouldNotBeNull();
-        references.ShouldContain(r => r.Location.Line == LineOf(Original, "public static int Caller()"));
+        problems.ShouldBeEmpty();
     }
 }

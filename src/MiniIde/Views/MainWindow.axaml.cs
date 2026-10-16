@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -11,7 +10,6 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using AvaloniaEdit;
 using MiniIde.Models;
 using MiniIde.ViewModels;
@@ -20,13 +18,6 @@ namespace MiniIde.Views;
 
 public partial class MainWindow : Window
 {
-    static MainWindow()
-    {
-        Control.RequestBringIntoViewEvent.AddClassHandler<TreeViewItem>(
-            (_, e) => e.TargetRect = e.TargetRect.WithWidth(0),
-            RoutingStrategies.Bubble);
-    }
-
     private MainWindowViewModel Vm => (MainWindowViewModel)DataContext!;
 
     // One binder per editor kind — never a merged registry (see TabEditorBinder). The code binder's
@@ -52,42 +43,18 @@ public partial class MainWindow : Window
             if (Vm is not null) Vm.RequestOpen += Reveal;
         };
         KeyDown += OnGlobalKeyDown;
-        // The safety-net refresh whenever the window regains focus: the OS change feed (SolutionWatcher) drives
-        // the steady state, but it is best-effort, and re-entering MiniIde is exactly when a dropped event
-        // would show. External tools (the agent, CLI git) own the writes under the read-only law.
+        // Re-entering MiniIde is exactly when something done elsewhere (an agent's edit, a `git init`) should
+        // show. External tools own the writes under the read-only law.
         Activated += OnWindowActivated;
-        // The watcher holds an OS handle and a debounce timer; a closing window wants neither, and a signal
-        // arriving mid-teardown would post to a dispatcher that is going away. Live runs go too: nothing else
-        // reaps them, so each one still going would outlive us as an orphan process (see StopAllRuns).
+        // The watcher holds an OS handle and a debounce timer; a closing window wants neither. Live runs go too —
+        // including those whose tabs were closed: nothing else reaps them, so each one would outlive us as an
+        // orphan process (see StopAllRuns).
         Closed += (_, _) =>
         {
             if (DataContext is not MainWindowViewModel vm) return;
             vm.Watcher.Dispose();
             vm.StopAllRuns();
         };
-        // The panel starts expanded, so the toggle's band starts at the full strip height (see TabStripHeight).
-        BottomPanelToggleBand.Height = TabStripHeight;
-        SolutionTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
-        SolutionTree.AddHandler(PointerPressedEvent, OnTreePointerPressed, RoutingStrategies.Tunnel);
-        BottomTabs.AddHandler(PointerPressedEvent, OnBottomTabsPointerPressed, RoutingStrategies.Tunnel);
-        BottomTabs.SelectionChanged += OnBottomTabsSelectionChanged;
-    }
-
-    /// <summary>Scopes the Disk panel's counter pull to the Disk tab being selected — a 1 s repaint for a panel
-    /// nobody is looking at is pure background cost. Its signal log is unaffected: that is event-driven and
-    /// stays live, so tabbing back after a burst still shows what happened.
-    ///
-    /// <para>Distinct from <see cref="OnBottomTabsPointerPressed"/>, which is a tunnel handler for
-    /// expand-on-click and is not a selection hook. The source guard is load-bearing: SelectionChanged bubbles,
-    /// so the Find results list and the three NuGet lists all raise it through this TabControl, and without the
-    /// guard picking a NuGet package would stop the Disk panel's timer.</para></summary>
-    private void OnBottomTabsSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (!ReferenceEquals(e.Source, BottomTabs)) return;
-        if (DataContext is not MainWindowViewModel vm) return;
-
-        if (ReferenceEquals(BottomTabs.SelectedItem, DiskTab)) vm.DiskInsight.StartPolling();
-        else vm.DiskInsight.StopPolling();
     }
 
     // Activated can fire before the DataContext is wired at startup; guard rather than assume Vm is set.
@@ -101,16 +68,12 @@ public partial class MainWindow : Window
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (ctrl && e.Key == Key.O) { e.Handled = true; await OpenSolutionDialogAsync(); }
-        else if (ctrl && shift && e.Key == Key.F) { e.Handled = true; if (!TrySearchTermInEditor()) FocusFind(); }
-        else if (e.Key == Key.F5) { e.Handled = true; if (Vm.PlayCommand.CanExecute(null)) Vm.PlayCommand.Execute(null); }
         else if (e.Key == Key.F12 && !shift) { e.Handled = true; await GoToDefinitionAsync(); }
-        else if (e.Key == Key.F12 && shift) { e.Handled = true; await FindRefsAsync(); }
     }
 
     /// <summary>Shows a location: opens its file, then puts the caret exactly on the hit, scrolls it into view,
     /// and focuses the editor. The view owns this because only it has the realized editor; every navigation
-    /// source (find results, problems, go-to-definition) reaches it through
-    /// <see cref="MainWindowViewModel.RequestOpen"/>.</summary>
+    /// source (problems, go-to-definition) reaches it through <see cref="MainWindowViewModel.RequestOpen"/>.</summary>
     private async Task Reveal(SourceLocation location)
     {
         await Vm.OpenFileAsync(location.File);
@@ -130,8 +93,8 @@ public partial class MainWindow : Window
     }
 
     /// <summary>The offset of <paramref name="location"/>, clamped into the document. A hit can name a position
-    /// that no longer exists — the file may have changed on disk since the search ran, or a diagnostic may point
-    /// one past the last column — and <c>TextDocument.GetOffset</c> throws on an out-of-range line.</summary>
+    /// that no longer exists — the file may have changed on disk since the analysis ran, or a diagnostic may
+    /// point one past the last column — and <c>TextDocument.GetOffset</c> throws on an out-of-range line.</summary>
     private static int OffsetOf(AvaloniaEdit.Document.TextDocument document, SourceLocation location)
     {
         var line = document.GetLineByNumber(Math.Clamp(location.Line, 1, document.LineCount));
@@ -149,7 +112,7 @@ public partial class MainWindow : Window
     {
         var path = Vm.Solution.SolutionPath;
         if (path is null) { Vm.Status = "No solution open"; return; }
-        await Vm.OpenSolutionCommand.ExecuteAsync(path); // refreshes the tree/project list...
+        await Vm.OpenSolutionCommand.ExecuteAsync(path); // refreshes the project list and restarts the watcher...
         await Vm.ReloadWorkspaceAsync();                 // ...and the semantic snapshot + open tabs
     }
 
@@ -159,10 +122,9 @@ public partial class MainWindow : Window
             await tab.CloseCommand.ExecuteAsync(null);
     }
 
-    // Middle-click anywhere on a tab header closes that tab, via the same CloseCommand the ✕ button runs (so
-    // save-on-close / stop-a-live-run still happen). The middle button has no Click/Tapped event in Avalonia —
-    // it only surfaces as PointerUpdateKind on a press — so this is a PointerPressed handler. Bubbling (not
-    // tunneling like the tree/bottom-tab handlers): we *want* to mark the press handled, but only in the
+    // Middle-click anywhere on a tab header closes that tab, via the same CloseCommand the ✕ button runs. The
+    // middle button has no Click/Tapped event in Avalonia — it only surfaces as PointerUpdateKind on a press — so
+    // this is a PointerPressed handler. Bubbling: we *want* to mark the press handled, but only in the
     // middle-button branch, so left-click selection and the right-click ContextMenu are untouched.
     private async void OnTabHeaderPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -176,8 +138,8 @@ public partial class MainWindow : Window
 
     private static string? GetTargetPath(object? dataContext) => dataContext switch
     {
-        TreeNode { Path: not null } tn => tn.Path,
         TabViewModelBase tab => tab.FilePath,
+        ProjectItemViewModel project => project.Path,
         MainWindowViewModel vm => vm.Solution.SolutionPath,
         _ => null
     };
@@ -193,49 +155,6 @@ public partial class MainWindow : Window
                 mi.IsEnabled = hasSolution;
     }
 
-    /// <summary>Fills the tree's Run submenu for the row being right-clicked. Built here rather than bound
-    /// because each row is a (this project × this configuration) pair: the project is the row's DataContext
-    /// and the configurations live on the view model, and no single binding source has both. Rebuilt on every
-    /// open, so a solution reload can never leave a stale configuration on the menu — and picking one runs it
-    /// without touching the header's own selection.
-    ///
-    /// <para>Hung off the row's ContextRequested rather than the menu's Opening for one hard reason: a
-    /// ContextMenu does not inherit its DataContext until it is actually shown, so at Opening time the node is
-    /// still null. The row always has it.</para></summary>
-    private void OnTreeCtxRequested(object? sender, ContextRequestedEventArgs e)
-    {
-        if (sender is not Control row || row.ContextMenu is not { } cm) return;
-        var run = cm.Items.OfType<MenuItem>().FirstOrDefault(mi => mi.Name == "TreeCtxRun");
-        // Non-project rows hide the item declaratively (TreeNode.IsProject) and have nothing to fill.
-        if (run is null || row.DataContext is not TreeNode { Kind: NodeKind.Project, Path: not null } node) return;
-
-        run.Items.Clear();
-        var project = Vm.Projects.FirstOrDefault(
-            p => string.Equals(p.Path, node.Path, StringComparison.OrdinalIgnoreCase));
-        var configurations = Vm.Solution.Configurations;
-
-        // Disabled-with-a-reason rather than hidden: "you can't run this one" is worth saying, and an empty
-        // submenu that silently does nothing is worse than a greyed item that explains itself.
-        var blocked =
-            project is null ? "This project isn't part of the loaded solution"
-            : !project.IsRunnable ? $"{project.Name} isn't a runnable project"
-            : configurations.Count == 0 ? "The solution declares no build configurations"
-            : null;
-        run.IsEnabled = blocked is null;
-        ToolTip.SetTip(run, blocked);
-        if (blocked is not null) return;
-
-        foreach (var configuration in configurations)
-        {
-            // Underscores are access-key markers in a menu header, so a configuration named "Hot_Reload" would
-            // otherwise render as "HotReload" with an odd shortcut. Doubling escapes them.
-            var item = new MenuItem { Header = configuration.Replace("_", "__") };
-            var chosen = configuration;
-            item.Click += (_, _) => Vm.RunProject(project!, chosen);
-            run.Items.Add(item);
-        }
-    }
-
     private void OnCtxOpenWithClaudeClick(object? sender, RoutedEventArgs e)
     {
         var slnPath = Vm.Solution.SolutionPath;
@@ -247,11 +166,9 @@ public partial class MainWindow : Window
 
     private void OnCtxOpenInExplorerClick(object? sender, RoutedEventArgs e)
     {
-        var ctx = (sender as MenuItem)?.DataContext;
-        var target = GetTargetPath(ctx);
+        var target = GetTargetPath((sender as MenuItem)?.DataContext);
         if (target is null) return;
-        var isFolder = ctx is TreeNode { Kind: NodeKind.Folder };
-        try { Vm.Shell.RevealInExplorer(target, isFolder); }
+        try { Vm.Shell.RevealInExplorer(target, isFolder: false); }
         catch (Exception ex) { Vm.Status = $"Open in Explorer failed: {ex.Message}"; }
     }
 
@@ -296,74 +213,75 @@ public partial class MainWindow : Window
         catch (Exception ex) { Vm.Status = $"Copy failed: {ex.Message}"; }
     }
 
-    // Open/expand on double-click via PointerPressed + ClickCount == 2 rather than DoubleTapped: the latter
-    // only fires when both presses resolve to the same source element, so it drops near row edges and right
-    // of the text (see docs/avalonia.md). PointerPressed fires wherever the press registers — everywhere
-    // selection already works. Tunnel-registered so it runs before TreeViewItem consumes the press; we must
-    // NOT set e.Handled, or selection would no longer commit on this press.
-    private async void OnTreePointerPressed(object? sender, PointerPressedEventArgs e)
+    // ── Double-click in Problems / NuGet tabs ──
+    //
+    // PointerPressed + ClickCount == 2 rather than DoubleTapped: the latter only fires when both presses resolve
+    // to the same source element, so it drops near row edges and right of the text (see docs/avalonia.md).
+    // Tunnel-registered so it runs before the item consumes the press; we must NOT set e.Handled, or selection
+    // would no longer commit on this press.
+    //
+    // Hooked on attach, not once: the TabControl discards a tab's content when a tab of another type is shown
+    // and realizes a fresh control on the way back. Remove-then-add keeps a re-attach of the same control from
+    // stacking a second handler.
+
+    private void HookDoubleClick(object? sender, EventHandler<PointerPressedEventArgs> handler)
     {
-        if (e.ClickCount != 2) return;
-        if (sender is TreeView tv && tv.SelectedItem is TreeNode node)
-        {
-            if (node.Kind == NodeKind.Project) Services.SolutionServiceExtensions.EnsureExpanded(node);
-            else if (node.Kind == NodeKind.File && node.Path is not null)
-                await Vm.OpenFileAsync(node.Path);
-        }
+        if (sender is not Control control) return;
+        control.RemoveHandler(PointerPressedEvent, handler);
+        control.AddHandler(PointerPressedEvent, handler, RoutingStrategies.Tunnel);
     }
 
-    // Wire double-click navigation once the Problems tree is realized (it lives inside a bottom TabItem, so
-    // it isn't in the visual tree at ctor time). Same tunnel PointerPressed + ClickCount==2 approach as the
-    // solution tree — DoubleTapped drops presses near row edges (see docs/avalonia.md).
-    private bool _problemsTreeHooked;
-    private void OnProblemsTreeAttached(object? sender, VisualTreeAttachmentEventArgs e)
-    {
-        if (_problemsTreeHooked || sender is not TreeView tv) return;
-        _problemsTreeHooked = true;
-        tv.AddHandler(PointerPressedEvent, OnProblemsPointerPressed, RoutingStrategies.Tunnel);
-    }
+    private void OnProblemsTreeAttached(object? sender, VisualTreeAttachmentEventArgs e) =>
+        HookDoubleClick(sender, OnProblemsPointerPressed);
+
+    private void OnNuGetPackagesAttached(object? sender, VisualTreeAttachmentEventArgs e) =>
+        HookDoubleClick(sender, OnNuGetPackagesPointerPressed);
+
+    private void OnNuGetVersionsAttached(object? sender, VisualTreeAttachmentEventArgs e) =>
+        HookDoubleClick(sender, OnNuGetVersionsPointerPressed);
+
+    // ClickCount counts presses of any button, so a double right-click would also read as 2 — only a left
+    // double-click is an "open".
+    private static bool IsLeftDoubleClick(object? sender, PointerPressedEventArgs e) =>
+        e.ClickCount == 2 && e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed;
 
     private void OnProblemsPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (e.ClickCount != 2) return;
-        if (sender is TreeView tv && tv.SelectedItem is ProblemLeaf leaf)
-            Vm.Problems.Activate(leaf);
+        if (!IsLeftDoubleClick(sender, e)) return;
+        if (sender is TreeView { SelectedItem: ProblemLeaf leaf, DataContext: ProblemsTabViewModel tab })
+            tab.Activate(leaf);
     }
 
-    // Same rationale as OnProblemsTreeAttached: the NuGet TabItem is not realized at ctor time, so its three
-    // ListBoxes aren't in the visual tree yet. All three realize together when the tab first shows — one
-    // AttachedToVisualTree fire is enough to hook them as a set. Tunnel PointerPressed + ClickCount==2 (never
-    // DoubleTapped) so presses at row edges / right of text still register (see docs/avalonia.md).
-    private bool _nugetListsHooked;
-    private void OnNuGetListsAttached(object? sender, VisualTreeAttachmentEventArgs e)
+    private async void OnProblemsTreeKeyDown(object? sender, KeyEventArgs e)
     {
-        if (_nugetListsHooked) return;
-        _nugetListsHooked = true;
-        NuGetProjectsList.AddHandler(PointerPressedEvent, OnNuGetProjectsPointerPressed, RoutingStrategies.Tunnel);
-        NuGetPackagesList.AddHandler(PointerPressedEvent, OnNuGetPackagesPointerPressed, RoutingStrategies.Tunnel);
-        NuGetVersionsList.AddHandler(PointerPressedEvent, OnNuGetVersionsPointerPressed, RoutingStrategies.Tunnel);
+        if (e.Key != Key.C || e.KeyModifiers != KeyModifiers.Control) return;
+        if (sender is not TreeView { SelectedItem: ProblemLeaf leaf }) return;
+        e.Handled = true;
+        await CopyProblemAsync(leaf);
     }
 
-    private async void OnNuGetProjectsPointerPressed(object? sender, PointerPressedEventArgs e)
+    private async void OnCtxCopyProblemClick(object? sender, RoutedEventArgs e)
     {
-        if (e.ClickCount != 2) return;
-        if (sender is ListBox lb && lb.SelectedItem is ProjectEntry entry)
-            await Vm.OpenFileAsync(entry.Path);
+        if ((sender as MenuItem)?.DataContext is ProblemLeaf leaf) await CopyProblemAsync(leaf);
     }
+
+    private Task CopyProblemAsync(ProblemLeaf leaf) =>
+        CopyToClipboardAsync(leaf.Item.ToCompilerText(Vm.Solution.ToRelativePath));
 
     private async void OnNuGetPackagesPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (e.ClickCount != 2) return;
-        if (sender is ListBox lb && lb.SelectedItem is PackageEntry entry)
-            await Vm.NuGetVm.OpenMetadataAsync(entry);
+        if (!IsLeftDoubleClick(sender, e)) return;
+        if (sender is ListBox { SelectedItem: PackageEntry entry, DataContext: NuGetTabViewModel tab })
+            await tab.OpenMetadataAsync(entry);
     }
 
     // The first press already committed SelectedVersion via the two-way binding — do not re-assign here. ApplyAsync
     // no-ops if SelectedPackage or SelectedVersion is null, so guarding those is not this handler's job.
     private async void OnNuGetVersionsPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (e.ClickCount != 2) return;
-        await Vm.NuGetVm.ApplyCommand.ExecuteAsync(null);
+        if (!IsLeftDoubleClick(sender, e)) return;
+        if (sender is ListBox { DataContext: NuGetTabViewModel tab })
+            await tab.ApplyCommand.ExecuteAsync(null);
     }
 
     private async void OnSolutionNameDoubleTapped(object? sender, TappedEventArgs e)
@@ -371,92 +289,6 @@ public partial class MainWindow : Window
         var path = Vm.Solution.SolutionPath;
         if (path is null) { await OpenSolutionDialogAsync(); return; }
         await Vm.OpenFileAsync(path);
-    }
-
-    private async void OnTreeKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (sender is not TreeView tv) return;
-        switch (e.Key)
-        {
-            case Key.Enter:
-                if (tv.SelectedItem is TreeNode { Kind: NodeKind.File, Path: not null } node)
-                {
-                    e.Handled = true;
-                    await Vm.OpenFileAsync(node.Path);
-                }
-                break;
-            case Key.PageDown: MovePageSelection(tv, direction: +1, e); break;
-            case Key.PageUp:   MovePageSelection(tv, direction: -1, e); break;
-            case Key.Home:     JumpTreeSelection(tv, toFirst: true,  e); break;
-            case Key.End:      JumpTreeSelection(tv, toFirst: false, e); break;
-        }
-    }
-
-    // TreeView is un-virtualized, so the realized TreeViewItem descendants — filtered to visible ones — are the
-    // full flat, in-order list of rendered rows honoring collapsed subtrees. If virtualization is ever turned
-    // on, off-screen items won't be here and these helpers need revisiting.
-    private static IReadOnlyList<TreeViewItem> GetVisibleTreeItems(TreeView tv) =>
-        tv.GetVisualDescendants().OfType<TreeViewItem>().Where(i => i.IsEffectivelyVisible).ToList();
-
-    private static int IndexOfSelected(IReadOnlyList<TreeViewItem> items, object? selected)
-    {
-        for (int i = 0; i < items.Count; i++)
-            if (ReferenceEquals(items[i].DataContext, selected)) return i;
-        return -1;
-    }
-
-    // Bails without setting Handled when there's nowhere to go — empty tree, tree not yet laid out, or already
-    // at the target end. The default ScrollViewer paging may still fire in that case, but the tree has no more
-    // rows to page through anyway.
-    private static void MovePageSelection(TreeView tv, int direction, KeyEventArgs e)
-    {
-        var items = GetVisibleTreeItems(tv);
-        if (items.Count == 0) return;
-
-        var viewport = tv.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault()?.Viewport.Height ?? 0;
-        if (viewport <= 0) return;
-
-        var actualIndex = IndexOfSelected(items, tv.SelectedItem);
-        // Nothing selected → treat as index 0. PageDown then advances by a page; PageUp clamps back to 0 and
-        // effectively selects the first row.
-        var current = Math.Max(0, actualIndex);
-        var itemHeight = items[current].Bounds.Height > 0 ? items[current].Bounds.Height : items[0].Bounds.Height;
-        if (itemHeight <= 0) return;
-
-        var page = Math.Max(1, (int)(viewport / itemHeight));
-        var newIndex = Math.Clamp(current + direction * page, 0, items.Count - 1);
-        if (newIndex == actualIndex) return;
-
-        SelectAndFocus(tv, items[newIndex]);
-        e.Handled = true;
-    }
-
-    private static void JumpTreeSelection(TreeView tv, bool toFirst, KeyEventArgs e)
-    {
-        var items = GetVisibleTreeItems(tv);
-        if (items.Count == 0) return;
-
-        var target = toFirst ? 0 : items.Count - 1;
-        if (IndexOfSelected(items, tv.SelectedItem) == target) return;
-
-        SelectAndFocus(tv, items[target]);
-        e.Handled = true;
-    }
-
-    // TreeView tracks keyboard focus separately from selection: the container carrying focus is where arrow-key
-    // navigation resumes, not the one carrying the blue selection highlight. Setting `SelectedItem` alone leaves
-    // the focus (white outline) on the previous container, so a subsequent arrow key jumps from *there*, not
-    // from where the user just paged to. Focusing the target container syncs both.
-    private static void SelectAndFocus(TreeView tv, TreeViewItem target)
-    {
-        tv.SelectedItem = target.DataContext;
-        target.Focus(NavigationMethod.Directional);
-        target.BringIntoView();
-    }
-
-    private void OnFindKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter) Vm.Find.SearchCommand.Execute(null);
     }
 
     // The TabControl reuses one realized TextEditor across all tabs of the same DataType and swaps its
@@ -480,103 +312,6 @@ public partial class MainWindow : Window
     {
         if (sender is TextEditor editor)
             foreach (var binder in _binders) binder.Unbind(editor);
-    }
-
-    // ── Bottom panel collapse / expand ──
-    //
-    // Layout state, so it lives here and not in the VM (which has never held any). A bool and a stashed
-    // GridLength are the whole of it; nothing persists across restarts and nothing ever collapses implicitly.
-
-    /// <summary>The bottom row's height while collapsed — a bar showing just the tab headers. Deliberately far
-    /// below <see cref="ExpandedMinPanelHeight"/>: the floor exists to stop the splitter stranding the panel at
-    /// an unusable height, and collapsing is not that.</summary>
-    private const double CollapsedPanelHeight = 22;
-
-    /// <summary>The shortest the splitter may leave the panel while it's open. Also the floor on a restore,
-    /// since the height we stash was itself subject to it.</summary>
-    private const double ExpandedMinPanelHeight = 200;
-
-    /// <summary>Height of the tab-header strip — Fluent's <c>TabItem</c> MinHeight. The toggle is centred inside a
-    /// band of this height so it lines up with the tab labels; while collapsed the strip is squeezed down to the
-    /// row, and the band follows it to <see cref="CollapsedPanelHeight"/>.</summary>
-    private const double TabStripHeight = 48;
-
-    private bool _bottomCollapsed;
-    private GridLength _expandedPanelHeight;
-
-    private RowDefinition BottomRow => Workspace.RowDefinitions[2];
-
-    private void OnToggleBottomPanelClick(object? sender, RoutedEventArgs e)
-    {
-        if (_bottomCollapsed) ExpandBottomPanel();
-        else CollapseBottomPanel();
-    }
-
-    private void CollapseBottomPanel()
-    {
-        if (_bottomCollapsed) return;
-
-        // Read the height live rather than assuming the 220 in the markup: that's only the initial value, and
-        // the GridSplitter mutates the row's Height in place, so this is whatever the user last dragged it to.
-        _expandedPanelHeight = BottomRow.Height;
-
-        // The 200px floor only applies while the panel is open — drop it first, or it would clamp the bar back
-        // up to 200 and the collapse would do nothing.
-        BottomRow.MinHeight = 0;
-        BottomRow.Height = new GridLength(CollapsedPanelHeight);
-
-        // The header strip is squeezed to the row; the toggle's band has to shrink with it or the button
-        // centres against a 48px strip that isn't there any more and lands below the bar's bottom edge.
-        BottomPanelToggleBand.Height = CollapsedPanelHeight;
-
-        // Load-bearing: left draggable, the splitter would let the user pull a "collapsed" panel back open
-        // behind the toggle's back, desyncing the glyph from reality.
-        BottomSplitter.IsEnabled = false;
-
-        _bottomCollapsed = true;
-        BottomPanelToggle.Content = "▴";
-        ToolTip.SetTip(BottomPanelToggle, "Restore panel");
-    }
-
-    /// <summary>Restores the height the panel had immediately before it was collapsed. A no-op when already
-    /// expanded — that's what lets every reveal path call it unconditionally.</summary>
-    private void ExpandBottomPanel()
-    {
-        if (!_bottomCollapsed) return;
-
-        BottomRow.Height = _expandedPanelHeight;
-        BottomRow.MinHeight = ExpandedMinPanelHeight;
-        BottomPanelToggleBand.Height = TabStripHeight;
-        BottomSplitter.IsEnabled = true;
-
-        _bottomCollapsed = false;
-        BottomPanelToggle.Content = "▾";
-        ToolTip.SetTip(BottomPanelToggle, "Collapse panel");
-    }
-
-    /// <summary>Surfaces a bottom tab: expands the panel if it's collapsed, then selects the tab. Every path
-    /// that reveals a bottom tab goes through here, so none of them can forget the expand half.</summary>
-    private void ShowBottomTab(TabItem tab)
-    {
-        ExpandBottomPanel();
-        BottomTabs.SelectedItem = tab;
-    }
-
-    // Restoring on a tab click can't hang off SelectionChanged: clicking the *already-selected* tab doesn't
-    // raise it, so collapsing with Find active and then clicking "Find" would silently do nothing. Hang it off
-    // the press instead — tunnel-registered so it runs before the TabItem consumes the press, and we must NOT
-    // set e.Handled, or the press would no longer commit the selection. The collapsed guard keeps this inert
-    // during normal use; while collapsed the only things under the pointer are the 22px tab headers.
-    private void OnBottomTabsPointerPressed(object? sender, PointerPressedEventArgs e) => ExpandBottomPanel();
-
-    private void FocusFind()
-    {
-        ShowBottomTab(FindTab);
-        Dispatcher.UIThread.Post(() =>
-        {
-            FindBox.Focus();
-            FindBox.SelectAll();
-        }, DispatcherPriority.Background);
     }
 
     private async Task OpenSolutionDialogAsync()
@@ -613,7 +348,7 @@ public partial class MainWindow : Window
         catch (Exception ex) { Vm.Status = $"Open new solution failed: {ex.Message}"; }
     }
 
-    // ── Code-editor context menu (Search / Find usages / Go to definition / Go to Implementation / Go to Subclasses / Rename) ──
+    // ── Code-editor context menu (Go to definition / Rename) ──
 
     // FindActiveEditor matched a code editor, so ActiveTab is an EditorTabViewModel and its FilePath is non-null.
     private async Task GoToDefinitionAsync()
@@ -623,110 +358,22 @@ public partial class MainWindow : Window
         await Vm.GoToDefinitionAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset);
     }
 
-    // Surface the Find tab afterwards — the results are useless behind a collapsed panel or another tab. Not
-    // FocusFind: the user wants the results, and focusing + select-alling the query box would be noise here.
-    private async Task FindRefsAsync()
-    {
-        var editor = FindActiveEditor();
-        if (editor is null) return;
-        await Vm.FindReferencesAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset, SubjectAt(editor));
-        ShowBottomTab(FindTab);
-    }
-
-    // Go to Implementation / Go to Subclasses surface into the same Find panel as Find usages, so they share its
-    // reveal discipline: run against the caret, then bring the Find tab forward.
-    private async Task FindImplsAsync()
-    {
-        var editor = FindActiveEditor();
-        if (editor is null) return;
-        await Vm.FindImplementationsAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset, SubjectAt(editor));
-        ShowBottomTab(FindTab);
-    }
-
-    private async Task FindSubclassesAsync()
-    {
-        var editor = FindActiveEditor();
-        if (editor is null) return;
-        await Vm.FindSubclassesAsync(Vm.ActiveTab!.FilePath!, editor.CaretOffset, SubjectAt(editor));
-        ShowBottomTab(FindTab);
-    }
-
-    // The banner subject is the clicked identifier text — the same view-side primitive the Search path uses
-    // (CodeSymbolContext.Term), so no Roslyn symbol crosses into the VM. A null/empty subject is fine: the
-    // banner label just quotes an empty string, and the results/count are unaffected.
-    private string? SubjectAt(TextEditor editor) =>
-        CodeSymbolContext.At(editor, _codeEditors.StateFor(editor)).Term;
-
     private void OnCodeCtxOpening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         if (sender is not ContextMenu cm) return;
 
         var editor = FindActiveEditor();
-        var context = CodeSymbolContext.At(editor, _codeEditors.StateFor(editor));
-        var canSearch = Vm.Solution.SolutionPath is not null && !string.IsNullOrEmpty(context.Term);
-
+        // A cheap synchronous gate: a resolvable identifier under the caret in a C# tab. Whether the symbol is
+        // actually renameable (defined in this solution, not a framework type) is the authoritative in-source
+        // check at invoke time — see RenameSymbolAsync.
+        var eligible = CodeSymbolContext.IsSymbolEligible(editor, _codeEditors.StateFor(editor));
         foreach (var item in cm.Items)
-            if (item is MenuItem mi)
-                switch (mi.Name)
-                {
-                    case "CtxSearchItem":
-                        mi.IsEnabled = canSearch;
-                        mi.Header = context.SearchHeader;
-                        break;
-                    case "CtxFindUsagesItem":
-                    case "CtxGoToDefItem":
-                    case "CtxRenameItem":
-                        // Same cheap synchronous gate as Find usages: a resolvable identifier under the caret in
-                        // a C# tab. Whether the symbol is actually renameable (defined in this solution, not a
-                        // framework type) is the authoritative in-source check at invoke time — see RenameSymbolAsync.
-                        mi.IsEnabled = context.SymbolEligible;
-                        break;
-                    // Kind-aware, so NOT folded into the shared SymbolEligible case: Go to Implementation lights
-                    // only on interfaces/overridable members, Go to Subclasses only on class/record/interface
-                    // names. Still approximate (classifications can't see abstract/virtual, and an unclassified
-                    // file enables leniently) — a query that resolves to nothing just shows "0" in the Find panel.
-                    case "CtxGoToImplItem":
-                        mi.IsEnabled = context.ImplementationEligible;
-                        break;
-                    case "CtxGoToSubclassesItem":
-                        mi.IsEnabled = context.SubclassEligible;
-                        break;
-                }
+            if (item is MenuItem mi) mi.IsEnabled = eligible;
     }
 
-    private void OnCtxSearchClick(object? sender, RoutedEventArgs e) => TrySearchTermInEditor(literalDefaults: true);
-
-    /// <summary>Searches the solution for the selection (or identifier under the caret) in the active editor,
-    /// then reveals the Find tab. Shared by the "Search solution" context-menu item and the Ctrl+Shift+F
-    /// shortcut. Returns false without side effects when there's no active editor, no term, or no solution —
-    /// letting the keyboard path fall back to simply focusing the Find box.
-    ///
-    /// <para><paramref name="literalDefaults"/> is set only by the context-menu path: a clicked token is an
-    /// exact literal, so it forces Regex off and Case-sensitive on. Ctrl+Shift+F passes false and
-    /// <b>deliberately leaves both checkboxes as the user set them</b> — a behavior change from when it forced
-    /// Regex off. The defaults are applied only past the guard (when a term will actually run), so a failed
-    /// invoke never silently flips the user's checkbox state.</para></summary>
-    private bool TrySearchTermInEditor(bool literalDefaults = false)
-    {
-        var editor = FindActiveEditor();
-        var term = CodeSymbolContext.At(editor, _codeEditors.StateFor(editor)).Term;
-        if (string.IsNullOrEmpty(term) || Vm.Solution.SolutionPath is null) return false;
-        if (literalDefaults) { Vm.Find.UseRegex = false; Vm.Find.CaseSensitive = true; }
-        Vm.Find.Query = term;
-        Vm.Find.SearchCommand.Execute(null);
-        FocusFind();
-        return true;
-    }
-
-    // The context-menu caret already sits on the clicked token (TabEditorBinder), so these resolve against
-    // the same offset as the F12 / Shift+F12 shortcuts.
-    private async void OnCtxFindUsagesClick(object? sender, RoutedEventArgs e) => await FindRefsAsync();
-
+    // The context-menu caret already sits on the clicked token (TabEditorBinder), so this resolves against the
+    // same offset as the F12 shortcut.
     private async void OnCtxGoToDefClick(object? sender, RoutedEventArgs e) => await GoToDefinitionAsync();
-
-    private async void OnCtxGoToImplClick(object? sender, RoutedEventArgs e) => await FindImplsAsync();
-
-    private async void OnCtxGoToSubclassesClick(object? sender, RoutedEventArgs e) => await FindSubclassesAsync();
 
     private async void OnCtxRenameClick(object? sender, RoutedEventArgs e) => await RenameSymbolAsync();
 

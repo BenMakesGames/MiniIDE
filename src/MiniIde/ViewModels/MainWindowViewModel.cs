@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -13,42 +14,29 @@ using MiniIde.Services;
 
 namespace MiniIde.ViewModels;
 
-public partial class MainWindowViewModel : ViewModelBase
+public partial class MainWindowViewModel : ViewModelBase, IProjectHost
 {
     public SolutionService Solution { get; }
     public WorkspaceService Workspace { get; }
     public SolutionWatcher Watcher { get; }
-    public SearchService Search { get; }
     public NuGetService NuGet { get; }
     public RunService Run { get; }
     public ShellService Shell { get; }
     public SyntaxHighlightService Highlight { get; }
 
-    public FindResultsViewModel Find { get; }
-    public ProblemsViewModel Problems { get; }
-    public DiskInsightViewModel DiskInsight { get; }
-    public NuGetViewModel NuGetVm { get; }
-
-    public ObservableCollection<TreeNode> Tree { get; } = new();
+    /// <summary>The left panel: one card per project, in the solution's (name-sorted) order.</summary>
+    public ObservableCollection<ProjectItemViewModel> Projects { get; } = new();
     public ObservableCollection<TabViewModelBase> Tabs { get; } = new();
-    public ObservableCollection<ProjectEntry> Projects { get; } = new();
-
-    /// <summary>The Run flyout's two groups. Both are rebuilt only when their <em>inputs</em> change (a
-    /// solution load, a different startup project); picking a row mutates the rows' <see cref="RunChoice.IsSelected"/>
-    /// instead, so the collections stay stable while the flyout is open.</summary>
-    public ObservableCollection<RunChoice> Configurations { get; } = new();
-    public ObservableCollection<RunChoice> LaunchProfiles { get; } = new();
 
     [ObservableProperty] private TabViewModelBase? _activeTab;
     [ObservableProperty] private string _status = "Ready";
-    [ObservableProperty] private ProjectEntry? _startupProject;
     [ObservableProperty][NotifyPropertyChangedFor(nameof(WindowTitle))] private string? _solutionName = "<no solution>";
 
     public string WindowTitle => Solution.SolutionPath is null ? "MiniIDE" : $"{SolutionName} - MiniIDE";
 
     /// <summary>Raised to ask the view to reveal a location — open its file, place the caret, scroll, focus.
-    /// The view owns that because only it has the realized editor; every navigation source (find results,
-    /// problems, go-to-definition) funnels through here rather than reaching into the editor itself.</summary>
+    /// The view owns that because only it has the realized editor; every navigation source (problems,
+    /// go-to-definition) funnels through here rather than reaching into the editor itself.</summary>
     public event Func<SourceLocation, Task>? RequestOpen;
 
     public MainWindowViewModel()
@@ -56,42 +44,14 @@ public partial class MainWindowViewModel : ViewModelBase
         Solution = new SolutionService();
         Workspace = new WorkspaceService();
         Watcher = new SolutionWatcher();
-        Watcher.Changed += OnDiskChanged;
-        Search = new SearchService();
+        Watcher.Changed += OnProjectFilesChanged;
         NuGet = new NuGetService();
         Run = new RunService();
         Shell = new ShellService();
         Highlight = new SyntaxHighlightService();
-        Workspace.Progress += m => Dispatcher.UIThread.Post(() => Status = m);
-        Find = new FindResultsViewModel(Search, Solution, OpenAsync);
-        Problems = new ProblemsViewModel(Workspace, Solution, EnsureWorkspaceReadyAsync, OpenAsync);
-        // Constructed at startup, not lazily on first show: its Changed subscription is the panel's signal log,
-        // and it has to be live before any solution opens or the first burst goes unrecorded.
-        DiskInsight = new DiskInsightViewModel(Workspace, Watcher, () => Tabs.OfType<EditorTabViewModel>());
-        NuGetVm = new NuGetViewModel(NuGet, ResolveNuGetOutput, ResolveNuGetMetadataTab);
     }
 
     private Task OpenAsync(SourceLocation location) => RequestOpen?.Invoke(location) ?? Task.CompletedTask;
-
-    /// <summary>Gets-or-creates the shared <c>NuGet - Output</c> tab and activates it. Keeps
-    /// <see cref="NuGetViewModel"/> ignorant of tab mechanics (Open Decision #3). The fixed <c>nuget:</c>
-    /// identity means a package restore never collides with a project literally named "NuGet".</summary>
-    private OutputTabViewModel ResolveNuGetOutput()
-    {
-        var tab = GetOrCreateOutputTab("nuget:", "NuGet - Output");
-        ActiveTab = tab;
-        return tab;
-    }
-
-    /// <summary>Per-package metadata tab counterpart to <see cref="ResolveNuGetOutput"/>. Same "get-or-create +
-    /// activate" contract; the caller supplies its own <c>nuget-meta:{id-lower}</c>-shaped id and header so
-    /// each package gets a distinct tab that dedups on re-double-click.</summary>
-    private OutputTabViewModel ResolveNuGetMetadataTab(string tabId, string header)
-    {
-        var tab = GetOrCreateOutputTab(tabId, header);
-        ActiveTab = tab;
-        return tab;
-    }
 
     [RelayCommand]
     public async Task OpenSolutionAsync(string path)
@@ -99,47 +59,140 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             Status = "Loading solution...";
-            await LoadTreeAsync(path);
+            LoadLocalSettings(path);
+            await LoadProjectsAsync(path);
             SolutionName = Path.GetFileNameWithoutExtension(path);
-            Problems.NotifyCanRefreshChanged();
-            // (Re)point the OS change feed at this solution — this is also the restart on "Reload solution"
-            // and on opening a different solution. If it can't start, the workspace reconcile keeps polling.
-            Workspace.DiskIsWatched = Watcher.Start(path);
+            // (Re)point the change feed at this solution — this is also the restart on "Reload solution".
+            var watching = Watcher.Start(path);
             RefreshGitState();
-            Status = $"Loaded {Path.GetFileName(path)} ({Solution.Projects.Count} projects)";
+            var loaded = $"Loaded {Path.GetFileName(path)} ({Solution.Projects.Count} projects)";
+            // An unreadable settings file already put its own message in the status bar; don't bury it.
+            if (!_settingsUnreadable)
+                Status = watching ? loaded : $"{loaded}; not watching for project changes — use Reload solution";
         }
         catch (Exception ex) { Status = ex.Message; }
     }
 
-    /// <summary>Rebuilds the tree and the project list from disk. Shared by the initial open and the
-    /// structural-change refresh, so the two can't drift. The startup project is re-resolved by path rather
-    /// than re-defaulted: an external tool adding a file must not silently move the user's F5 target.</summary>
-    private async Task LoadTreeAsync(string path)
+    /// <summary>Re-reads the project list from disk and reconciles the cards against it by path: a card for a
+    /// project still in the solution is updated in place (keeping its selections and run buttons), new
+    /// projects get new cards, and departed ones are dropped. Shared by the initial open and every change the
+    /// watcher reports, so the two can't drift.</summary>
+    private async Task LoadProjectsAsync(string path)
     {
-        var previousStartup = StartupProject?.Path;
-        var projectNodes = await Solution.LoadAsync(path);
-        Tree.Clear();
-        foreach (var n in projectNodes) Tree.Add(n);
-        Projects.Clear();
-        foreach (var e in Solution.Projects) Projects.Add(e);
-        NuGetVm.SetProjects(Solution.Projects);
-        // Re-resolved by name for the same reason the startup project is re-resolved by path, with sharper
-        // teeth: `dotnet run -c <gone>` doesn't fail, it quietly builds a DEBUG-less binary into a bin folder
-        // of that name. So a configuration whose name has disappeared falls back rather than being carried.
-        SelectedConfiguration = PickConfiguration(SelectedConfiguration);
-        StartupProject = Projects.FirstOrDefault(p =>
-                             string.Equals(p.Path, previousStartup, StringComparison.OrdinalIgnoreCase))
-                         ?? PickDefaultStartup(Solution.Projects);
-        // Unconditional, because a reload that leaves the startup project unchanged raises no
-        // OnStartupProjectChanged and would otherwise keep the previous solution's configurations.
-        RefreshRunOptions();
+        await Solution.LoadAsync(path);
+
+        var existing = Projects.ToDictionary(p => p.Path, StringComparer.OrdinalIgnoreCase);
+        var cards = new List<ProjectItemViewModel>();
+        foreach (var entry in Solution.Projects)
+        {
+            if (existing.TryGetValue(entry.Path, out var card)) card.Update(entry, Solution.Configurations);
+            else card = new ProjectItemViewModel(entry, Solution.Configurations, this);
+            card.IsStarred = _starred.Contains(entry.Path);
+            cards.Add(card);
+        }
+        ShowInOrder(cards);
+
+        // A live run belongs to its project's card. Re-attached by path, so a card created by this reload (the
+        // project was briefly gone from the solution) still shows the runs it had.
+        foreach (var card in cards)
+            foreach (var run in _liveRuns.Where(r => SamePath(_runProjects[r], card.Path)))
+                if (!card.LiveRuns.Contains(run)) card.LiveRuns.Add(run);
     }
 
-    private static ProjectEntry? PickDefaultStartup(IReadOnlyList<ProjectEntry> projects)
+    /// <summary>Shows <paramref name="cards"/> starred-first, and within each group in the solution service's
+    /// order (runnable first, then by name). Always ranked against that canonical order, never the on-screen one —
+    /// otherwise an unstarred project would stay wherever its star had put it.
+    ///
+    /// <para>Rebuilt only when membership or order actually changed: clearing a list of unchanged cards would
+    /// re-realize every one of them, closing any open Run flyout under the user's cursor.</para></summary>
+    private void ShowInOrder(IEnumerable<ProjectItemViewModel> cards)
     {
-        foreach (var e in projects) if (e.IsRunnable) return e;
-        return projects.Count > 0 ? projects[0] : null;
+        var rank = Solution.Projects
+            .Select((entry, index) => (entry.Path, index))
+            .ToDictionary(x => x.Path, x => x.index, StringComparer.OrdinalIgnoreCase);
+        var ordered = cards
+            .OrderBy(c => !c.IsStarred)
+            .ThenBy(c => rank.GetValueOrDefault(c.Path, int.MaxValue))
+            .ToList();
+        if (ordered.SequenceEqual(Projects)) return;
+        Projects.Clear();
+        foreach (var card in ordered) Projects.Add(card);
     }
+
+    // ── Stars ─────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // Personal, per solution, kept in .miniide/<Solution>.local.json (see LocalSolutionSettings).
+
+    /// <summary>Starred projects' full paths. Kept for paths not currently in the solution too, so a project
+    /// that briefly drops out (a branch switch) gets its star back when it returns.</summary>
+    private readonly HashSet<string> _starred = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether the settings file could not be read. Saving then would overwrite whatever is in it — a
+    /// hand-edit with one typo would cost every star — so starring is refused until it's fixed.</summary>
+    private bool _settingsUnreadable;
+
+    private void LoadLocalSettings(string solutionPath)
+    {
+        _starred.Clear();
+        _settingsUnreadable = false;
+        try
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(solutionPath))!;
+            foreach (var relative in LocalSolutionSettings.Load(solutionPath).StarredProjects)
+                _starred.Add(Path.GetFullPath(Path.Combine(dir, relative)));
+        }
+        catch (Exception ex)
+        {
+            _settingsUnreadable = true;
+            Status = $"Could not read {LocalSolutionSettings.PathFor(solutionPath)}: {ex.Message}";
+        }
+    }
+
+    public void SetStarred(ProjectItemViewModel project, bool starred)
+    {
+        if (Solution.SolutionPath is not { } solutionPath) return;
+        if (_settingsUnreadable)
+        {
+            Status = $"Not saving stars: fix or delete {LocalSolutionSettings.PathFor(solutionPath)}, then reload";
+            return;
+        }
+
+        if (starred) _starred.Add(project.Path);
+        else _starred.Remove(project.Path);
+        project.IsStarred = starred;
+        ShowInOrder(Projects.ToList());
+
+        var dir = Path.GetDirectoryName(Path.GetFullPath(solutionPath))!;
+        var relative = _starred
+            .Select(p => Path.GetRelativePath(dir, p))
+            .Order(StringComparer.OrdinalIgnoreCase) // stable file contents: no diff noise from set order
+            .ToArray();
+        try { new LocalSolutionSettings(relative).Save(solutionPath); }
+        catch (Exception ex) { Status = $"Could not save stars: {ex.Message}"; }
+    }
+
+    /// <summary>A solution file, project file, launch settings, or settings file changed on disk. Arrives on a
+    /// threadpool thread; the reload and everything that follows it happen on the UI thread. Our own star saves
+    /// land here too — re-reading what we just wrote is a no-op, so they aren't filtered out.</summary>
+    private void OnProjectFilesChanged() => Dispatcher.UIThread.Post(async () =>
+    {
+        if (Solution.SolutionPath is not { } path) return;
+        try
+        {
+            LoadLocalSettings(path);
+            await LoadProjectsAsync(path);
+            foreach (var tab in Tabs.OfType<NuGetTabViewModel>()) tab.ReloadPackages();
+        }
+        catch (Exception ex) { Status = ex.Message; }
+    });
+
+    private static bool SamePath(string a, string b) => string.Equals(
+        Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+
+    private ProjectItemViewModel? CardFor(string projectPath) =>
+        Projects.FirstOrDefault(p => SamePath(p.Path, projectPath));
+
+    // ── Tabs ──────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Opens (or re-activates) the tab for <paramref name="path"/>. Genuinely async: the file read
     /// happens off the UI thread. A file that can't be read reports to the status bar rather than throwing
@@ -154,112 +207,190 @@ public partial class MainWindowViewModel : ViewModelBase
         try { tab = await TabViewModelBase.CreateForFileAsync(path); }
         catch (Exception ex) { Status = $"Could not open {Path.GetFileName(path)}: {ex.Message}"; return; }
 
-        tab.RequestClose += CloseTabAsync;
-        Tabs.Add(tab);
+        AddTab(tab);
         ActiveTab = tab;
     }
 
-    /// <summary>Reuses the existing output tab with this identity, or creates one (appended at the end,
-    /// mirroring <see cref="OpenFileAsync"/> — Open Decision #4). Dedup keys on <see cref="TabViewModelBase.TabId"/>,
-    /// never the header, so two output tabs can share a title while staying distinct.</summary>
-    private OutputTabViewModel GetOrCreateOutputTab(string tabId, string header)
+    // Every tab enters through here, so none can be added without its close wiring.
+    private void AddTab(TabViewModelBase tab)
     {
-        var existing = Tabs.OfType<OutputTabViewModel>().FirstOrDefault(t => t.TabId == tabId);
-        if (existing is not null) return existing;
-        var tab = new OutputTabViewModel(tabId, header);
         tab.RequestClose += CloseTabAsync;
         Tabs.Add(tab);
+    }
+
+    /// <summary>Activates <paramref name="tab"/>, putting it back on the strip first if it was closed — which is
+    /// how a run whose tab was closed is reached again from its project card.</summary>
+    public void ShowTab(TabViewModelBase tab)
+    {
+        if (!Tabs.Contains(tab)) Tabs.Add(tab);
+        ActiveTab = tab;
+    }
+
+    /// <summary>Gets-or-creates the tab with identity <paramref name="tabId"/> and activates it. Dedup keys on
+    /// <see cref="TabViewModelBase.TabId"/>, never the header, so two tabs can share a title while staying
+    /// distinct.</summary>
+    private T ShowOrCreateTab<T>(string tabId, Func<T> create) where T : TabViewModelBase
+    {
+        var tab = Tabs.OfType<T>().FirstOrDefault(t => t.TabId == tabId);
+        if (tab is null)
+        {
+            tab = create();
+            AddTab(tab);
+        }
+        ActiveTab = tab;
         return tab;
     }
+
+    private OutputTabViewModel ShowOutputTab(string tabId, string header) =>
+        ShowOrCreateTab(tabId, () => new OutputTabViewModel(tabId, header));
 
     // Returns Task (not async) so it still satisfies the RequestClose Func<,Task> contract: with save-on-close
     // gone under the read-only law, nothing here awaits.
     private Task CloseTabAsync(TabViewModelBase tab)
     {
-        // A closing output tab takes its own run down with it (no confirmation dialog yet). Nothing consults
-        // shared state, so every other live run keeps going.
-        (tab as OutputTabViewModel)?.StopRun();
-        // No save-on-close: the editor is a read-only window onto disk, so a closing tab has nothing to persist.
+        // A run tab's process deliberately survives its tab: only the tab's own Stop ends a run. Its card keeps
+        // a button for it, which is the way back. An analysis, on the other hand, has nobody left to report to.
+        (tab as ProblemsTabViewModel)?.Cancel();
+        var index = Tabs.IndexOf(tab);
         Tabs.Remove(tab);
-        if (ActiveTab == tab) ActiveTab = Tabs.Count > 0 ? Tabs[0] : null;
+        if (ActiveTab == tab)
+            ActiveTab = Tabs.Count == 0 ? null : Tabs[Math.Clamp(index, 0, Tabs.Count - 1)];
         return Task.CompletedTask;
     }
 
-    /// <summary>Kills every run still going. Wired to the window's <c>Closed</c>: run children are started with
-    /// <c>UseShellExecute = false</c> / <c>CreateNoWindow</c>, so Windows does not reap them with us and each
-    /// live run would otherwise outlive the IDE as an orphan.</summary>
-    public void StopAllRuns()
+    /// <summary>Editor tabs revalidate when shown. The stamp gate inside means an unchanged file costs a stat,
+    /// so activating a tab is never a disk read for nothing.</summary>
+    partial void OnActiveTabChanged(TabViewModelBase? oldValue, TabViewModelBase? newValue)
     {
-        foreach (var tab in Tabs.OfType<OutputTabViewModel>()) tab.StopRun();
+        (oldValue as FileWatcherTabViewModel)?.StopPolling();
+        (newValue as FileWatcherTabViewModel)?.StartPolling();
+        if (newValue is EditorTabViewModel tab) _ = RevalidateAsync(tab);
     }
 
-    /// <summary>How many runs this session has started per project <em>and</em> selection, keyed by normalized
-    /// path plus configuration and profile — the same things the header names, so the numbering groups exactly
-    /// as the labels read. Monotonic: a number is never handed out twice, so closing "(2)" doesn't make the
-    /// next run reuse that label and a header always names the same run it did a minute ago.</summary>
+    // Fire-and-forget from a property setter, so it must swallow into the status bar: an exception escaping
+    // here would be an unobserved task, not something a caller could catch.
+    private async Task RevalidateAsync(EditorTabViewModel tab)
+    {
+        try { await tab.RevalidateFromDiskAsync(); }
+        catch (Exception ex) { Status = ex.Message; }
+    }
+
+    /// <summary>Focus-time refresh (wired to the window's <c>Activated</c> event): whatever the user did
+    /// elsewhere — an agent editing the file on screen, a <c>git init</c> — shows when they come back. Cheap: a
+    /// stat for the active tab and a directory probe for git.</summary>
+    public async Task RefreshFromDiskAsync()
+    {
+        RefreshGitState();
+        if (ActiveTab is EditorTabViewModel active) await RevalidateAsync(active);
+    }
+
+    /// <summary>Backs the explicit "Reload solution" command's snapshot half: forces a full workspace rebuild
+    /// and reloads every open editor tab. The project list is the command's own job.</summary>
+    public async Task ReloadWorkspaceAsync()
+    {
+        try
+        {
+            await Workspace.ReloadIfLoadedAsync();
+            await ReloadEditorTabsAsync();
+        }
+        catch (Exception ex) { Status = ex.Message; }
+    }
+
+    /// <summary>Brings every open editor tab up to date with disk, eagerly — for the moments that deliberately
+    /// bypass revalidate-on-show: an explicit "Reload solution", and the refresh a rename does after its own
+    /// writes. Each tab stamp-gates its own read and content-compares before touching the buffer, so an
+    /// unchanged file is a stat and a no-op — no flicker, no caret reset.</summary>
+    private async Task ReloadEditorTabsAsync()
+    {
+        foreach (var tab in Tabs.OfType<EditorTabViewModel>().ToList())
+            await tab.RevalidateFromDiskAsync();
+    }
+
+    // ── Project actions (IProjectHost) ────────────────────────────────────────────────────────────────
+
+    /// <summary>Runs on the project's Problems tab, creating it on first use. Re-asking refreshes the existing
+    /// tab rather than opening a second one — that is what "Find problems" means a second time.</summary>
+    public void FindProblems(ProjectItemViewModel project)
+    {
+        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
+        var tab = ShowOrCreateTab(ProblemsTabViewModel.TabIdFor(project.Path),
+            () => new ProblemsTabViewModel(project.Entry, Workspace, EnsureWorkspaceReadyAsync, OpenAsync));
+        if (tab.RefreshCommand.CanExecute(null)) tab.RefreshCommand.Execute(null);
+    }
+
+    [RelayCommand]
+    private void ShowAbout() => ShowOrCreateTab(AboutTabViewModel.Id, () => new AboutTabViewModel());
+
+    [RelayCommand]
+    private void ShowFileWatcher() =>
+        ShowOrCreateTab(FileWatcherTabViewModel.Id, () => new FileWatcherTabViewModel(Watcher));
+
+    public void ManageNuGet(ProjectItemViewModel project) =>
+        ShowOrCreateTab(NuGetTabViewModel.TabIdFor(project.Path),
+            () => new NuGetTabViewModel(project.Entry, NuGet,
+                () => ShowOutputTab("nuget:", "NuGet - Output"),
+                ShowOutputTab));
+
+    // ── Runs ──────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // A run tab owns one process at a time. Closing the tab doesn't stop it; the tab's Stop does, and so does
+    // the IDE closing. While a run is live, its project card shows a button that brings its tab back.
+
+    /// <summary>Every run whose process is still going, whether or not its tab is open. The shutdown path's
+    /// list: run children are started with <c>CreateNoWindow</c>, so Windows does not reap them with us.</summary>
+    private readonly List<OutputTabViewModel> _liveRuns = new();
+
+    /// <summary>Which project each run tab belongs to, by path — a run outlives any one card instance.</summary>
+    private readonly Dictionary<OutputTabViewModel, string> _runProjects = new();
+
+    /// <summary>How many runs this session has started per project <em>and</em> selection — the same things
+    /// the header names, so the numbering groups exactly as the labels read. Monotonic: a number is never handed
+    /// out twice, so a header always names the same run it did a minute ago.</summary>
     private readonly Dictionary<string, int> _runsStarted = new(StringComparer.Ordinal);
-
-    /// <summary>Allocates the identity and header for one fresh run tab. The id stays in the <c>run:</c>
-    /// namespace <see cref="TabViewModelBase.TabId"/> documents, made unique per invocation; the header is
-    /// plain for a project's first run under a selection and numbered from its second on.</summary>
-    private (string TabId, string Header) NextRunTab(string projectPath, string label, RunSelection selection)
-    {
-        var key = $"{Path.GetFullPath(projectPath).ToLowerInvariant()}|{selection.Configuration}|{selection.LaunchProfile}";
-        var n = _runsStarted[key] = _runsStarted.GetValueOrDefault(key) + 1;
-        return ($"run:{key}#{n}", n == 1 ? $"{label} - Output" : $"{label} - Output ({n})");
-    }
-
-    private bool CanPlay() => StartupProject?.IsRunnable == true;
-
-    /// <summary>Runs the startup project under the header's current selection. Nothing here is gated on a run
-    /// already being live: repeat presses are meant to launch concurrent instances, each in its own tab.</summary>
-    [RelayCommand(CanExecute = nameof(CanPlay))]
-    public void Play()
-    {
-        if (StartupProject is not { } project) { Status = "No startup project"; return; }
-        StartRun(project, SelectionFor(project, SelectedConfiguration, SelectedLaunchProfile));
-    }
-
-    /// <summary>Runs <paramref name="project"/> under <paramref name="configuration"/> — the solution tree's
-    /// right-click Run. Deliberately writes none of the header's selections: the tree is a way to run something
-    /// once, not a way to re-point the F5 target.</summary>
-    /// <param name="configuration">A name <see cref="SolutionService.Configurations"/> declares. An unknown one
-    /// does not fail — <c>dotnet run -c &lt;unknown&gt;</c> quietly builds a DEBUG-less binary — so callers must
-    /// offer only what the solution has.</param>
-    public void RunProject(ProjectEntry project, string configuration)
-    {
-        // The header's launch profile belongs to the startup project: it was read from that project's
-        // launchSettings.json, and naming a profile another project doesn't declare is a hard `dotnet run`
-        // error. So it carries only when the tree row *is* the startup project — which is exactly the case
-        // where "same as the Run button" has to mean the same process arguments too.
-        var profile = project == StartupProject ? SelectedLaunchProfile : null;
-        StartRun(project, SelectionFor(project, configuration, profile));
-    }
-
-    // A test project runs under `dotnet test`, which has no --launch-profile at all. Dropping the profile in
-    // this one place keeps it authoritative rather than trusting each entry point to have offered none.
-    private static RunSelection SelectionFor(ProjectEntry project, string configuration, string? launchProfile) =>
-        new(configuration, project.Kind == ProjectKind.Tst ? null : launchProfile);
 
     /// <summary>Opens a brand-new tab that owns its own process and launches the run into it, so repeat runs
     /// are concurrent instances rather than replacements. The tab keeps the project and selection it was born
     /// with, which is what lets its own Run button restart the same thing after it exits.</summary>
-    private void StartRun(ProjectEntry project, RunSelection selection)
+    public void StartRun(ProjectItemViewModel project, RunSelection selection)
     {
-        var name = Path.GetFileNameWithoutExtension(project.Path);
-        var label = $"{name} [{Describe(selection)}]";
-        var (tabId, header) = NextRunTab(project.Path, label, selection);
-        var tab = new OutputTabViewModel(tabId, header, t => Launch(project, selection, t, label));
-        tab.RequestClose += CloseTabAsync;
-        Tabs.Add(tab);
+        var entry = project.Entry;
+        var description = ProjectItemViewModel.Describe(selection);
+        var label = $"{entry.Name} [{description}]";
+        var key = $"{Path.GetFullPath(entry.Path).ToLowerInvariant()}|{selection.Configuration}|{selection.LaunchProfile}";
+        var n = _runsStarted[key] = _runsStarted.GetValueOrDefault(key) + 1;
+
+        var tab = new OutputTabViewModel(
+            $"run:{key}#{n}",
+            n == 1 ? $"{label} - Output" : $"{label} - Output ({n})",
+            t => Launch(entry, selection, t, label),
+            n == 1 ? description : $"{description} ({n})");
+        _runProjects[tab] = entry.Path;
+        tab.PropertyChanged += OnRunTabPropertyChanged;
+        AddTab(tab);
         ActiveTab = tab;
-        Launch(project, selection, tab, label);
+        Launch(entry, selection, tab, label);
+    }
+
+    /// <summary>Keeps the live-run lists in step with each tab's process — including a run restarted from its
+    /// own tab, which brings the card's button back.</summary>
+    private void OnRunTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(OutputTabViewModel.IsRunLive) || sender is not OutputTabViewModel tab) return;
+        var card = CardFor(_runProjects[tab]);
+        if (tab.IsRunLive)
+        {
+            if (!_liveRuns.Contains(tab)) _liveRuns.Add(tab);
+            if (card is not null && !card.LiveRuns.Contains(tab)) card.LiveRuns.Add(tab);
+        }
+        else
+        {
+            _liveRuns.Remove(tab);
+            card?.LiveRuns.Remove(tab);
+        }
     }
 
     /// <summary>Starts one process into <paramref name="tab"/> and returns as soon as it is launched — the
-    /// waiting is done by a detached continuation. Nothing that starts a run may stay busy for the run's
-    /// lifetime: an async command that awaited the process would sit disabled until it exited, which is the
-    /// one thing a second, concurrent run needs the Run button not to do.</summary>
+    /// waiting is done by a detached continuation, so nothing that starts a run stays busy for its lifetime.</summary>
     private void Launch(ProjectEntry project, RunSelection selection, OutputTabViewModel tab, string label)
     {
         // The status bar is last-write-wins and concurrent runs share it, so every run message names its
@@ -286,117 +417,17 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { Status = $"{label}: {ex.Message}"; }
     }
 
-    partial void OnStartupProjectChanged(ProjectEntry? value)
+    /// <summary>Kills every run still going, open tab or not. Wired to the window's <c>Closed</c>.</summary>
+    public void StopAllRuns()
     {
-        PlayCommand.NotifyCanExecuteChanged();
-        RefreshRunOptions();
+        foreach (var tab in _liveRuns.ToList()) tab.StopRun();
     }
-
-    // ── Run selection ─────────────────────────────────────────────────────────────────────────────────
-    //
-    // Two independent axes, never one merged list: a configuration decides what is compiled (`-c`), a profile
-    // decides what environment it launches into (`-lp`). Both are session-only — there is no settings store
-    // anywhere in the app, and the startup project is likewise only preserved across in-session reloads.
-
-    private const string DefaultConfiguration = "Debug";
-
-    /// <summary>Label for the profile row that means "pass no <c>-lp</c> at all", which is where every session
-    /// starts and the only way back once a profile has been picked.</summary>
-    private const string NoProfileLabel = "(dotnet default)";
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RunLabel))]
-    private string _selectedConfiguration = DefaultConfiguration;
-
-    [ObservableProperty] private string? _selectedLaunchProfile;
-
-    /// <summary>Whether the flyout has a profile group to show. False for a project with no launch settings and
-    /// for every test project, since <c>dotnet test</c> takes no profile.</summary>
-    [ObservableProperty] private bool _hasLaunchProfiles;
-
-    /// <summary>The split button's primary label. It names the configuration so a Release run is not
-    /// indistinguishable from a Debug one before it starts; the profile stays in the flyout, where the
-    /// button's width isn't at stake.</summary>
-    public string RunLabel => $"▶ Run ({SelectedConfiguration})";
-
-    [RelayCommand]
-    private void SelectConfiguration(string? configuration)
-    {
-        if (configuration is not null) SelectedConfiguration = configuration;
-    }
-
-    [RelayCommand]
-    private void SelectLaunchProfile(string? profile) => SelectedLaunchProfile = profile;
-
-    partial void OnSelectedConfigurationChanged(string value) => SyncRunOptionSelection();
-    partial void OnSelectedLaunchProfileChanged(string? value) => SyncRunOptionSelection();
-
-    /// <summary>Re-resolves what the flyout can offer and rebuilds both groups. Called after a solution load
-    /// and whenever the startup project changes, because those two events own the inputs: the solution owns
-    /// the configurations, the startup project owns the profiles.</summary>
-    private void RefreshRunOptions()
-    {
-        var profiles = StartupProject is { Kind: not ProjectKind.Tst } project
-            ? LaunchProfileReader.Read(project.Path)
-            : Array.Empty<string>();
-
-        // Passing a profile the project doesn't have is a hard error (unlike an unknown configuration, which
-        // fails silently), so a carried-over name is dropped rather than risked.
-        if (SelectedLaunchProfile is { } selected && !profiles.Contains(selected, StringComparer.Ordinal))
-            SelectedLaunchProfile = null;
-
-        Configurations.Clear();
-        foreach (var configuration in Solution.Configurations)
-            Configurations.Add(new RunChoice(configuration, configuration, SelectConfigurationCommand,
-                string.Equals(configuration, SelectedConfiguration, StringComparison.OrdinalIgnoreCase)));
-
-        LaunchProfiles.Clear();
-        if (profiles.Count > 0)
-        {
-            LaunchProfiles.Add(new RunChoice(NoProfileLabel, null, SelectLaunchProfileCommand, SelectedLaunchProfile is null));
-            foreach (var profile in profiles)
-                LaunchProfiles.Add(new RunChoice(profile, profile, SelectLaunchProfileCommand,
-                    string.Equals(profile, SelectedLaunchProfile, StringComparison.Ordinal)));
-        }
-        HasLaunchProfiles = LaunchProfiles.Count > 0;
-    }
-
-    /// <summary>Moves the radio marks to the current selections without touching either collection — see
-    /// <see cref="RunChoice.IsSelected"/> for why the rows are updated rather than rebuilt.</summary>
-    private void SyncRunOptionSelection()
-    {
-        foreach (var choice in Configurations)
-            choice.IsSelected = string.Equals(choice.Value, SelectedConfiguration, StringComparison.OrdinalIgnoreCase);
-        foreach (var choice in LaunchProfiles)
-            choice.IsSelected = string.Equals(choice.Value, SelectedLaunchProfile, StringComparison.Ordinal);
-    }
-
-    /// <summary>The configuration to select given <paramref name="preferred"/>: itself when the solution still
-    /// declares it, otherwise <c>Debug</c>, otherwise whatever the solution does declare. Never returns a name
-    /// the solution doesn't have — that is the whole point.</summary>
-    private string PickConfiguration(string? preferred)
-    {
-        var configurations = Solution.Configurations;
-        foreach (var c in configurations)
-            if (string.Equals(c, preferred, StringComparison.OrdinalIgnoreCase)) return c;
-        foreach (var c in configurations)
-            if (string.Equals(c, DefaultConfiguration, StringComparison.OrdinalIgnoreCase)) return c;
-        return configurations.Count > 0 ? configurations[0] : DefaultConfiguration;
-    }
-
-    /// <summary>How a selection reads in a tab header and a status message. One helper so the two can't
-    /// drift.</summary>
-    private static string Describe(RunSelection selection) =>
-        selection.LaunchProfile is { } profile
-            ? $"{selection.Configuration}, {profile}"
-            : selection.Configuration;
-
 
     // ── Git ───────────────────────────────────────────────────────────────────────────────────────────
     //
     // Pull, push and init, and nothing else. The bar's whole state is one question — is this solution inside
-    // a repository, and where is its root — and `.git` is pruned out of the disk feed by design, so that
-    // question is POLLED (see RefreshGitState's callers), never signalled. docs/git.md has the reasoning.
+    // a repository, and where is its root — and that question is POLLED (see RefreshGitState's callers), never
+    // signalled. docs/git.md has the reasoning.
 
     /// <summary>The open solution's own directory, or null when no solution is open. Observable because the
     /// bar distinguishes "no solution" (a disabled pull/push pair) from "a solution that isn't in a repo"
@@ -460,27 +491,16 @@ public partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Recomputes the repository state from disk. Called from the three moments that can change it:
     /// a solution opening, the window being activated (<see cref="RefreshFromDiskAsync"/>, which is what
-    /// picks up a repository created or deleted outside the IDE), and our own successful <c>git init</c>.
-    /// Deliberately not wired to <see cref="Watcher"/> — <c>.git</c> is pruned, so it produces no signal to
-    /// wire to.</summary>
+    /// picks up a repository created or deleted outside the IDE), and our own successful <c>git init</c>.</summary>
     private void RefreshGitState()
     {
         SolutionDirectory = Solution.SolutionPath is { } path ? Path.GetDirectoryName(path) : null;
         RepositoryRoot = GitService.FindRepositoryRoot(SolutionDirectory);
     }
 
-    /// <summary>Gets-or-creates the one shared <c>Git - Output</c> tab and activates it. Same shape as
-    /// <see cref="ResolveNuGetOutput"/>, including passing no starter: that leaves <c>HasRun</c> false, so
-    /// the tab shows no run strip.</summary>
-    private OutputTabViewModel ResolveGitOutput()
-    {
-        var tab = GetOrCreateOutputTab("git:", "Git - Output");
-        ActiveTab = tab;
-        return tab;
-    }
-
-    /// <summary>The one path all three commands funnel through: activate the tab, echo the command, run it,
-    /// report the outcome. Returns the exit code, or null when git could not be launched at all.
+    /// <summary>The one path all three commands funnel through: activate the shared <c>Git - Output</c> tab,
+    /// echo the command, run it, report the outcome. Returns the exit code, or null when git could not be
+    /// launched at all.
     ///
     /// <para>The buffer is appended to, never cleared — the Git tab is a transcript of the session's git
     /// activity, and each entry is legible because its own command line sits above it.</para></summary>
@@ -488,7 +508,7 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         if (workingDirectory is null) { Status = "No solution open"; return null; }
 
-        var tab = ResolveGitOutput();
+        var tab = ShowOutputTab("git:", "Git - Output");
         var command = $"git {string.Join(' ', arguments)}";
         // A blank line before every echo but the first, so consecutive transcripts don't run together.
         if (tab.Document.TextLength > 0) tab.Append("");
@@ -511,133 +531,18 @@ public partial class MainWindowViewModel : ViewModelBase
         // In a finally so a throw can't leave all three buttons permanently dead.
         finally { IsGitBusy = false; }
     }
+
     // ── Semantic queries ──────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Brings the Roslyn workspace up to date with the authoritative disk before a semantic query:
     /// loads it if needed, then reconciles the snapshot against current file contents. Every semantic query
     /// goes through this — skipping it means resolving against stale text, which after any length-changing
-    /// external edit silently returns positions for the wrong symbol. The reconcile reads disk itself (the
-    /// view holds no editable buffer to hand it), so nothing needs snapshotting before the first await.</summary>
+    /// external edit silently returns positions for the wrong symbol.</summary>
     private async Task EnsureWorkspaceReadyAsync(CancellationToken ct = default)
     {
         if (Solution.SolutionPath is null) return;
         await Workspace.EnsureLoadedAsync(Solution.SolutionPath, ct);
         await Workspace.ReconcileWithDiskAsync(ct);
-    }
-
-    // ── Disk-change routing ───────────────────────────────────────────────────────────────────────────
-    //
-    // One signal, two INDEPENDENT dirty tracks: the workspace's pending-set (drained by the next semantic
-    // query) and each tab's IsStale flag (consumed when the tab is next shown). They are separate because a
-    // single shared set would let the first consumer to drain it erase the other's mark.
-    //
-    // Only the visible surfaces react now — the active tab and, on a structural change, the tree. The
-    // snapshot stays lazy: reconciling it on every watcher tick would pay the expensive part for edits no
-    // query ever asks about.
-
-    /// <summary>Handles one debounced burst from <see cref="Watcher"/>. Arrives on a threadpool thread: the
-    /// workspace's dirty-track pushes are thread-safe and happen here, and everything touching tabs or the
-    /// tree hops to the UI thread.</summary>
-    private void OnDiskChanged(DiskChangeSignal signal)
-    {
-        if (signal.Overflow || signal.Structural) Workspace.RequestFullRescan();
-        else Workspace.MarkPathsChanged(signal.Paths);
-
-        Dispatcher.UIThread.Post(async () =>
-        {
-            try { await ApplyDiskChangeToViewAsync(signal); }
-            catch (Exception ex) { Status = ex.Message; }
-        });
-    }
-
-    private async Task ApplyDiskChangeToViewAsync(DiskChangeSignal signal)
-    {
-        // An overflow means the OS dropped events, so no path list can be trusted: every tab is suspect.
-        // Marking them stale is cheap — each one costs a stat when it's next shown, not a read.
-        var changed = signal.Paths.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var tab in Tabs.OfType<EditorTabViewModel>())
-            if (tab.FilePath is not null && (signal.Overflow || changed.Contains(Path.GetFullPath(tab.FilePath))))
-                tab.IsStale = true;
-
-        // Structural changes are the one thing the tree can't learn any other way — a new file simply never
-        // appears until something rebuilds the nodes. Overflow may have hidden a structural change, so it
-        // refreshes too.
-        if ((signal.Structural || signal.Overflow) && Solution.SolutionPath is not null)
-            await LoadTreeAsync(Solution.SolutionPath);
-
-        // The live push: the file the user is looking at updates the instant it changes, with no focus
-        // change. That is the read-alongside-an-agent payoff. Background tabs stay lazy.
-        if (ActiveTab is EditorTabViewModel active && active.IsStale) await active.RevalidateFromDiskAsync();
-    }
-
-    /// <summary>The lazy half: a background tab is re-read only when it's shown, and only if flagged. The
-    /// stamp gate inside means an unchanged file costs a stat, so activating a tab is never a disk read for
-    /// nothing.</summary>
-    partial void OnActiveTabChanged(TabViewModelBase? value)
-    {
-        if (value is not EditorTabViewModel { IsStale: true } tab) return;
-        _ = RevalidateActivatedTabAsync(tab);
-    }
-
-    // Fire-and-forget from a property setter, so it must swallow into the status bar: an exception escaping
-    // here would be an unobserved task, not something a caller could catch.
-    private async Task RevalidateActivatedTabAsync(EditorTabViewModel tab)
-    {
-        try { await tab.RevalidateFromDiskAsync(); }
-        catch (Exception ex) { Status = ex.Message; }
-    }
-
-    /// <summary>Focus-time safety-net (wired to the window's <c>Activated</c> event). The watcher handles the
-    /// steady state now, so this exists for what it might have missed while we were unfocused —
-    /// <c>FileSystemWatcher</c> is best-effort and a dropped event has no other backstop.
-    ///
-    /// <para>Both tracks are re-armed to distrust the feed rather than to re-read: every tab is marked stale
-    /// (one stat each, paid lazily on activation) and the snapshot is told to rescan (a manifest walk plus one
-    /// stat per document — the "bounded stat-walk" that replaces the old O(bytes-in-the-solution) focus). With
-    /// nothing changed since we left, that is zero reads. The active tab and the snapshot (only if already
-    /// loaded — focus must never trigger the cold MSBuild load) are brought current now. Errors report to the
-    /// status bar rather than throwing out of the <c>async void</c> event handler.</para></summary>
-    public async Task RefreshFromDiskAsync()
-    {
-        try
-        {
-            // First, and cheap: `.git` is pruned out of the watcher, so a repository created or deleted
-            // outside the IDE can only ever be learned about here. Ahead of the awaits so a failing
-            // reconcile can't swallow it.
-            RefreshGitState();
-            foreach (var tab in Tabs.OfType<EditorTabViewModel>()) tab.IsStale = true;
-            Workspace.RequestFullRescan();
-            if (ActiveTab is EditorTabViewModel active) await active.RevalidateFromDiskAsync();
-            if (Workspace.IsLoaded) await Workspace.ReconcileWithDiskAsync();
-        }
-        catch (Exception ex) { Status = ex.Message; }
-    }
-
-    /// <summary>Backs the explicit "Reload solution" command's snapshot half: forces a full workspace rebuild
-    /// (so structural changes are picked up) and reloads any drifted open tabs. The tree/project reload is the
-    /// command's own job; this refreshes the semantic snapshot that reload would otherwise leave stale.</summary>
-    public async Task ReloadWorkspaceAsync()
-    {
-        try
-        {
-            await Workspace.ReloadIfLoadedAsync();
-            await ReloadDriftedTabsAsync();
-        }
-        catch (Exception ex) { Status = ex.Message; }
-    }
-
-    /// <summary>Brings every open editor tab up to date with disk, eagerly. Reserved for the moments that
-    /// deliberately bypass laziness: an explicit "Reload solution", and the refresh a rename does after its own
-    /// writes. The steady state goes through the stale flag instead.
-    ///
-    /// <para>Each tab stamp-gates its own read and content-compares before touching the buffer, so an unchanged
-    /// file is a stat and a no-op — no flicker, no caret reset. Covers non-Roslyn tabs (a <c>.md</c>, a
-    /// <c>.json</c>) that the snapshot reconcile doesn't. A file that vanished or can't be read is left as-is
-    /// until the next refresh.</para></summary>
-    private async Task ReloadDriftedTabsAsync()
-    {
-        foreach (var tab in Tabs.OfType<EditorTabViewModel>().ToList())
-            await tab.RevalidateFromDiskAsync();
     }
 
     /// <summary>Navigates to the definition of the symbol at <paramref name="caretOffset"/>, reporting the
@@ -652,51 +557,6 @@ public partial class MainWindowViewModel : ViewModelBase
         if (definition is null) { Status = "No definition found"; return; }
         Status = "Done";
         await OpenAsync(definition);
-    }
-
-    /// <summary>Fills the Find panel with references to the symbol at <paramref name="caretOffset"/>. The panel
-    /// owns its own results and status; this just decides what to hand it. <paramref name="subject"/> is the
-    /// clicked identifier text, shown in the panel's context banner (<c>Usages of "X"</c>).</summary>
-    public async Task FindReferencesAsync(string file, int caretOffset, string? subject)
-    {
-        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
-        Status = "Loading workspace...";
-        await EnsureWorkspaceReadyAsync();
-        Status = "Finding references...";
-        var references = await Workspace.FindReferencesAsync(file, caretOffset);
-        if (references is null) { Find.ShowNoResults("No symbol found"); Status = "No symbol found"; return; }
-        Find.ShowResults(references, "reference", $"Usages of \"{subject}\"");
-        Status = Find.Status;
-    }
-
-    /// <summary>Fills the Find panel with the in-source implementers/overrides of the symbol at
-    /// <paramref name="caretOffset"/>. Mirrors <see cref="FindReferencesAsync"/>: the panel owns its results and
-    /// status; this decides what to hand it. <paramref name="subject"/> feeds the context banner.</summary>
-    public async Task FindImplementationsAsync(string file, int caretOffset, string? subject)
-    {
-        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
-        Status = "Loading workspace (first use may take a while)...";
-        await EnsureWorkspaceReadyAsync();
-        Status = "Finding implementations...";
-        var results = await Workspace.FindImplementationsAsync(file, caretOffset);
-        if (results is null) { Find.ShowNoResults("No symbol found"); Status = "No symbol found"; return; }
-        Find.ShowResults(results, "implementation", $"Implementations of \"{subject}\"");
-        Status = Find.Status;
-    }
-
-    /// <summary>Fills the Find panel with the in-source derived types (transitively) of the type at
-    /// <paramref name="caretOffset"/>. Mirrors <see cref="FindReferencesAsync"/>. <paramref name="subject"/>
-    /// feeds the context banner.</summary>
-    public async Task FindSubclassesAsync(string file, int caretOffset, string? subject)
-    {
-        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
-        Status = "Loading workspace (first use may take a while)...";
-        await EnsureWorkspaceReadyAsync();
-        Status = "Finding subclasses...";
-        var results = await Workspace.FindSubclassesAsync(file, caretOffset);
-        if (results is null) { Find.ShowNoResults("No symbol found"); Status = "No symbol found"; return; }
-        Find.ShowResults(results, "subclass", $"Subclasses of \"{subject}\"", "es");
-        Status = Find.Status;
     }
 
     /// <summary>Renames the symbol at <paramref name="caretOffset"/> solution-wide, writing every reference (and
@@ -721,7 +581,7 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { Status = $"Could not read {Path.GetFileName(file)}: {ex.Message}"; return; }
         if (!string.Equals(viewText, diskText, StringComparison.Ordinal))
         {
-            await ReloadDriftedTabsAsync();
+            await ReloadEditorTabsAsync();
             Status = "File changed on disk — view refreshed. Re-invoke Rename on the symbol.";
             return;
         }
@@ -747,24 +607,14 @@ public partial class MainWindowViewModel : ViewModelBase
                 return;
         }
 
-        // This is the app's one first-party multi-file write, and it refreshes the view itself below. Mute the
-        // watcher over exactly the paths it touches, or the resulting burst would queue a redundant reconcile
-        // racing that refresh. The mute expires (it is not consumed), so a later external edit to these same
-        // files is still caught.
-        Watcher.MuteWrites(SelfWrittenPaths(outcome));
-
         try { RenameService.ApplyToDisk(outcome); }
         catch (Exception ex) { Status = $"Rename failed writing to disk: {ex.Message}"; return; }
 
-        // Reflect the writes back into the view. The focus reconcile refreshes the snapshot and open tabs on
-        // content drift, but it does NOT touch the solution tree, and a moved file's tab is keyed to a path
-        // that no longer exists — so a file move needs an explicit tree-node replace + tab re-home here.
-        if (outcome.Move is { } move) await ApplyFileMoveToViewAsync(move.OldPath, move.NewPath);
-        // Muting the watcher means nothing marked these paths changed, so this reconcile has to ask for the
-        // full pass itself — otherwise it would drain an empty pending-set and skip the rename entirely.
-        Workspace.RequestFullRescan(); // structural (a move) rebuilds; content-only overlays
+        // Reflect the writes back into the view. A moved file's tab is keyed to a path that no longer exists,
+        // so it is re-homed; everything else is a stamp-gated revalidate.
+        if (outcome.Move is { } move) await RehomeMovedTabAsync(move.OldPath, move.NewPath);
         await Workspace.ReconcileWithDiskAsync();
-        await ReloadDriftedTabsAsync();
+        await ReloadEditorTabsAsync();
 
         var count = outcome.ChangedFiles.Count;
         var files = count == 1 ? "file" : "files";
@@ -773,25 +623,10 @@ public partial class MainWindowViewModel : ViewModelBase
             : $"Renamed to {newName} across {count} {files}";
     }
 
-    // Every path the rename apply is about to touch: each rewritten file, plus both ends of the move (the
-    // File.Move raises events on the source and the destination).
-    private static IEnumerable<string> SelfWrittenPaths(RenameOutcome outcome)
+    /// <summary>Re-homes any tab open on a renamed file (its <c>TabId</c> is get-only, so it must be closed and
+    /// reopened). A case-only rename leaves the case-folded <c>FileId</c> unchanged, so nothing needs doing.</summary>
+    private async Task RehomeMovedTabAsync(string oldPath, string newPath)
     {
-        foreach (var file in outcome.ChangedFiles) yield return file.Path;
-        if (outcome.Move is not { } move) yield break;
-        yield return move.OldPath;
-        yield return move.NewPath;
-    }
-
-    /// <summary>Propagates a file rename into the view after the disk move: replaces the moved file's tree node
-    /// (its <c>Name</c>/<c>Path</c> are <c>init</c>-only, so it can't be mutated in place) and re-homes any tab
-    /// open on the old path (its <c>TabId</c> is get-only, so it must be closed and reopened). A case-only
-    /// rename leaves the case-folded <c>FileId</c> unchanged, so the tab identity is stable and only the tree
-    /// node needs replacing.</summary>
-    private async Task ApplyFileMoveToViewAsync(string oldPath, string newPath)
-    {
-        ReplaceTreeFileNode(oldPath, newPath);
-
         var oldId = TabViewModelBase.FileId(oldPath);
         if (string.Equals(oldId, TabViewModelBase.FileId(newPath), StringComparison.Ordinal)) return;
 
@@ -800,31 +635,5 @@ public partial class MainWindowViewModel : ViewModelBase
         var wasActive = ReferenceEquals(ActiveTab, open);
         await CloseTabAsync(open);
         if (wasActive) await OpenFileAsync(newPath);
-    }
-
-    private void ReplaceTreeFileNode(string oldPath, string newPath)
-    {
-        var oldFull = Path.GetFullPath(oldPath);
-        foreach (var root in Tree)
-            if (TryReplaceFileNode(root, oldFull, newPath)) return;
-    }
-
-    // Walks a subtree replacing the file node whose path matches. TreeNode has no parent back-pointer, so the
-    // replace happens from the parent while iterating its Children (an ObservableCollection, so the swap is what
-    // the UI observes). Case-insensitive path match, matching FindDocument / FileId's normalization.
-    private static bool TryReplaceFileNode(TreeNode parent, string oldFull, string newPath)
-    {
-        for (int i = 0; i < parent.Children.Count; i++)
-        {
-            var child = parent.Children[i];
-            if (child.Kind == NodeKind.File && child.Path is not null &&
-                string.Equals(Path.GetFullPath(child.Path), oldFull, StringComparison.OrdinalIgnoreCase))
-            {
-                parent.Children[i] = new TreeNode { Name = Path.GetFileName(newPath), Kind = NodeKind.File, Path = newPath };
-                return true;
-            }
-            if (TryReplaceFileNode(child, oldFull, newPath)) return true;
-        }
-        return false;
     }
 }

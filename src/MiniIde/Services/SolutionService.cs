@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio.SolutionPersistence.Model;
 using Microsoft.VisualStudio.SolutionPersistence.Serializer;
 using MiniIde.Models;
 
@@ -28,59 +27,23 @@ public class SolutionService
             ? absolutePath
             : Path.GetRelativePath(Path.GetDirectoryName(SolutionPath)!, absolutePath);
 
-    public async Task<IReadOnlyList<TreeNode>> LoadAsync(string path, CancellationToken ct = default)
+    /// <summary>Reads the solution's project list and configurations. Metadata only — no MSBuild evaluation —
+    /// so it is cheap enough to re-run whenever a solution or project file changes on disk.</summary>
+    public async Task LoadAsync(string path, CancellationToken ct = default)
     {
-        SolutionPath = path;
-        var dir = Path.GetDirectoryName(path)!;
         var serializer = SolutionSerializers.GetSerializerByMoniker(path)
             ?? throw new System.InvalidOperationException($"Unrecognized solution format: {path}");
-        SolutionModel model = await serializer.OpenAsync(path, ct);
+        var model = await serializer.OpenAsync(path, ct);
+        var dir = Path.GetDirectoryName(path)!;
 
-        var entries = new List<ProjectEntry>();
-        var projectNodes = new List<TreeNode>();
-        var ordered = model.SolutionProjects
-            .OrderBy(p => Path.GetFileNameWithoutExtension(p.FilePath), System.StringComparer.OrdinalIgnoreCase);
-        foreach (var p in ordered)
-        {
-            var abs = Path.GetFullPath(Path.Combine(dir, p.FilePath));
-            var kind = ProjectClassifier.Classify(abs);
-            var name = Path.GetFileNameWithoutExtension(p.FilePath);
-            entries.Add(new ProjectEntry(abs, name, kind));
-            var projNode = new TreeNode
-            {
-                Name = name,
-                Kind = NodeKind.Project,
-                Path = abs,
-                ProjectKind = kind
-            };
-            PopulateProjectFiles(projNode);
-            projectNodes.Add(projNode);
-        }
+        Projects = model.SolutionProjects
+            .Select(p => Path.GetFullPath(Path.Combine(dir, p.FilePath)))
+            .Select(abs => new ProjectEntry(abs, Path.GetFileNameWithoutExtension(abs), ProjectClassifier.Classify(abs)))
+            // Runnable projects first: they are what the cards are mostly for, and a library's card has no Run.
+            .OrderBy(e => !e.IsRunnable)
+            .ThenBy(e => e.Name, System.StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         Configurations = model.BuildTypes.ToArray();
-        Projects = entries;
-        return projectNodes;
-    }
-
-    public static void PopulateProjectFiles(TreeNode projectNode)
-    {
-        if (projectNode.IsLoaded || projectNode.Path is null) return;
-        var dir = Path.GetDirectoryName(projectNode.Path)!;
-        var root = BuildFolder(dir, dir);
-        foreach (var c in root.Children) projectNode.Children.Add(c);
-        projectNode.IsLoaded = true;
-    }
-
-    private static TreeNode BuildFolder(string root, string dir)
-    {
-        var node = new TreeNode { Name = Path.GetFileName(dir), Kind = NodeKind.Folder, Path = dir };
-        foreach (var sub in Directory.EnumerateDirectories(dir))
-        {
-            var name = Path.GetFileName(sub);
-            if (IdeDirectories.Pruned.Contains(name)) continue;
-            node.Children.Add(BuildFolder(root, sub));
-        }
-        foreach (var f in Directory.EnumerateFiles(dir))
-            node.Children.Add(new TreeNode { Name = Path.GetFileName(f), Kind = NodeKind.File, Path = f });
-        return node;
+        SolutionPath = path;
     }
 }

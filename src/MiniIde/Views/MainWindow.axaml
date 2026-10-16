@@ -54,6 +54,11 @@
                                     <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
                                 </MenuItem.Icon>
                             </MenuItem>
+                            <MenuItem Header="Open in Windows _Terminal" Click="OnCtxOpenInWindowsTerminalClick">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="{x:Static m:ActionIcon.Terminal}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#9CDCFE" VerticalAlignment="Center"/>
+                                </MenuItem.Icon>
+                            </MenuItem>
                             <Separator/>
                             <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"/>
                             <MenuItem Header="Copy _relative path" Click="OnCtxCopyRelativePathClick"/>
@@ -114,6 +119,11 @@
                                         <MenuItem Header="_Open in Explorer" Click="OnCtxOpenInExplorerClick">
                                             <MenuItem.Icon>
                                                 <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Open in Windows _Terminal" Click="OnCtxOpenInWindowsTerminalClick">
+                                            <MenuItem.Icon>
+                                                <TextBlock Text="{x:Static m:ActionIcon.Terminal}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#9CDCFE" VerticalAlignment="Center"/>
                                             </MenuItem.Icon>
                                         </MenuItem>
                                         <Separator/>
@@ -315,17 +325,49 @@
                                                Foreground="#9A9AA0"/>
                                 </StackPanel>
                             </Border>
-                            <ae:TextEditor Grid.Row="1"
-                                           IsReadOnly="True"
-                                           ShowLineNumbers="False"
-                                           WordWrap="False"
-                                           FontFamily="Consolas,monospace"
-                                           FontSize="13"
-                                           Background="#000000"
-                                           Foreground="#DCDCDC"
-                                           AttachedToVisualTree="OnEditorAttached"
-                                           DataContextChanged="OnEditorDataContextChanged"
-                                           DetachedFromVisualTree="OnEditorDetached"/>
+                            <!-- Panel so the "Follow tail" button floats over the editor's bottom-right
+                                 corner. The button appears only when the view has fallen behind the tail
+                                 (StickToEnd is false); clicking it snaps to the last line and re-engages
+                                 follow mode (the only way back in, now that scrolling to the bottom no
+                                 longer does). Right margin clears the vertical scrollbar. -->
+                            <Panel Grid.Row="1">
+                                <ae:TextEditor IsReadOnly="True"
+                                               ShowLineNumbers="False"
+                                               WordWrap="False"
+                                               FontFamily="Consolas,monospace"
+                                               FontSize="13"
+                                               Background="#000000"
+                                               Foreground="#DCDCDC"
+                                               AttachedToVisualTree="OnEditorAttached"
+                                               DataContextChanged="OnEditorDataContextChanged"
+                                               DetachedFromVisualTree="OnEditorDetached"/>
+                                <Button Content="↓ Follow tail"
+                                        IsVisible="{Binding !StickToEnd}"
+                                        Command="{Binding JumpToEndCommand}"
+                                        ToolTip.Tip="Follow new output as it arrives"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Bottom"
+                                        Margin="0,0,20,14"
+                                        Padding="10,4"
+                                        Background="#2A2A30"
+                                        Foreground="#DCDCDC"
+                                        BorderBrush="#60808080"
+                                        BorderThickness="1">
+                                    <!-- The Fluent default overrides Background on pointerover/pressed via
+                                         ContentPresenter, so the inline Background above alone leaves the
+                                         button looking unstyled (near-transparent) under the pointer. -->
+                                    <Button.Styles>
+                                        <Style Selector="Button:pointerover /template/ ContentPresenter">
+                                            <Setter Property="Background" Value="#3A3A42"/>
+                                            <Setter Property="BorderBrush" Value="#80909090"/>
+                                        </Style>
+                                        <Style Selector="Button:pressed /template/ ContentPresenter">
+                                            <Setter Property="Background" Value="#45454D"/>
+                                            <Setter Property="BorderBrush" Value="#80909090"/>
+                                        </Style>
+                                    </Button.Styles>
+                                </Button>
+                            </Panel>
                         </Grid>
                     </DataTemplate>
                     <DataTemplate DataType="vm:ImageTabViewModel">

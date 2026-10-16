@@ -172,6 +172,16 @@ public partial class MainWindow : Window
         catch (Exception ex) { Vm.Status = $"Open in Explorer failed: {ex.Message}"; }
     }
 
+    // GetTargetPath hands back a .sln(x) or .csproj file; the terminal opens in its containing folder.
+    private void OnCtxOpenInWindowsTerminalClick(object? sender, RoutedEventArgs e)
+    {
+        var target = GetTargetPath((sender as MenuItem)?.DataContext);
+        var dir = target is null ? null : Path.GetDirectoryName(target);
+        if (dir is null) return;
+        try { Vm.Shell.OpenInWindowsTerminal(dir); }
+        catch (Exception ex) { Vm.Status = $"Open in Windows Terminal failed: {ex.Message}"; }
+    }
+
     // async void like its siblings: the shell call blocks for the entire life of any dialog Windows raises
     // (the "how do you want to open this?" picker), so it must run off the UI thread or the window freezes
     // behind the picker. The window handle owns that picker, so it centres on and draws in front of MiniIDE.

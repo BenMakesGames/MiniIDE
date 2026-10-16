@@ -18,6 +18,7 @@ public static class ActionIcon
     public const string Reload       = "\U000F0450"; // refresh
     public const string Claude       = "\U000F06A9"; // robot
     public const string Explorer     = "\U000F024B"; // folder
+    public const string Terminal     = "\U000F018D"; // console-line
     public const string OpenExternal = "\U000F03CC"; // open-in-new
     public const string Run          = "\U000F040A"; // play
     public const string GitPull      = "\U000F0045"; // arrow-down

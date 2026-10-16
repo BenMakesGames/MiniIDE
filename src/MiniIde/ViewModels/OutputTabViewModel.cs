@@ -72,6 +72,30 @@ public partial class OutputTabViewModel : DocumentTabViewModel
     /// control.</summary>
     public string StopTip => IsStopping ? "Already stopping — waiting for the process to exit" : "Stop this run";
 
+    /// <summary>Whether the view is pinned to the tail of the output — a new line scrolls into view only while
+    /// this is true. The attached editor flips it to false on any user interaction that implies "I'm reading,
+    /// not following": scrolling the viewport away from the tail, or clicking into the editor to place a
+    /// caret. Scrolling back to the bottom does <em>not</em> re-engage follow; only the overlay "Follow tail"
+    /// button does, so the user never has the viewport yanked out from under them unexpectedly. The button is
+    /// bound to <c>!StickToEnd</c>, so it appears exactly when the view has fallen behind the tail.</summary>
+    [ObservableProperty]
+    private bool _stickToEnd = true;
+
+    /// <summary>Raised by <see cref="JumpToEnd"/> so the view attached to this tab (which owns the
+    /// <c>TextEditor</c>, not the view model) can scroll to the final line. The binder subscribes on attach
+    /// and unsubscribes on detach, so a tab with no realized editor silently drops the request rather than
+    /// leaking a handler.</summary>
+    public event Action? ScrollToEndRequested;
+
+    /// <summary>Snaps the view back to the tail and re-engages follow mode. Called by the overlay button that
+    /// appears when the user has scrolled away from the bottom.</summary>
+    [RelayCommand]
+    private void JumpToEnd()
+    {
+        StickToEnd = true;
+        ScrollToEndRequested?.Invoke();
+    }
+
     private bool CanStopRun => IsRunLive && !IsStopping;
     private bool CanRunAgain => HasRun && !IsRunLive;
 
@@ -126,7 +150,14 @@ public partial class OutputTabViewModel : DocumentTabViewModel
         });
     }
 
-    public void Clear() => Dispatcher.UIThread.Post(() => Document.Text = "");
+    public void Clear() => Dispatcher.UIThread.Post(() =>
+    {
+        Document.Text = "";
+        // A fresh run always wants to follow its own output: whatever the user had set the previous run to,
+        // the next one starts from the tail. Otherwise re-running an exited process from a scrolled-up state
+        // would silently drop every line into the void.
+        StickToEnd = true;
+    });
 
     public void Append(string line) => Dispatcher.UIThread.Post(() =>
     {

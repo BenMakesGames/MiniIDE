@@ -55,6 +55,27 @@ public sealed class ShellService
         catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled) { /* user closed the picker */ }
     }
 
+    /// <summary>Opens a terminal in <paramref name="directory"/>. Tries, in order, <c>wt.exe</c> (Windows Terminal),
+    /// <c>pwsh.exe</c> (PowerShell 7+), then <c>powershell.exe</c> (Windows PowerShell, always present on Windows).
+    /// Each candidate is attempted on every call — no caching — so an install or uninstall between calls is picked
+    /// up immediately. The user-facing label is "Windows Terminal" since that is the preferred host; the fallbacks
+    /// are the honest best-effort when wt isn't resolvable. Throws only when the final <c>powershell.exe</c>
+    /// launch fails.</summary>
+    public void OpenInWindowsTerminal(string directory)
+    {
+        if (TryStart(new ProcessStartInfo { FileName = "wt.exe", UseShellExecute = true, ArgumentList = { "-d", directory } })) return;
+        if (TryStart(new ProcessStartInfo { FileName = "pwsh.exe", WorkingDirectory = directory, UseShellExecute = true })) return;
+        Process.Start(new ProcessStartInfo { FileName = "powershell.exe", WorkingDirectory = directory, UseShellExecute = true });
+    }
+
+    // A missing execution alias (wt without the Store app installed, pwsh without PS7) surfaces as Win32Exception
+    // from Process.Start — fast, with no window flash — so try/catch is cheap enough to re-run on every click.
+    private static bool TryStart(ProcessStartInfo psi)
+    {
+        try { Process.Start(psi); return true; }
+        catch (Win32Exception) { return false; }
+    }
+
     /// <summary>Opens a terminal in <paramref name="directory"/> running <c>claude</c>. Prefers Windows Terminal;
     /// on a wt.exe launch failure (absent execution alias → <see cref="System.ComponentModel.Win32Exception"/>)
     /// falls back to PowerShell for the app's lifetime. Throws only when PowerShell also fails to launch — a

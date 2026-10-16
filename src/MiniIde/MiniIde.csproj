@@ -81,6 +81,6 @@
     <PackageReference Include="Microsoft.VisualStudio.SolutionPersistence" Version="1.0.52" />
     <PackageReference Include="NuGet.Protocol" Version="7.6.0" />
     <!-- Pin transitive to patched version. NuGet.Packaging 7.6.0 pulls 9.0.0 which has GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf. -->
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.10" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.13" />
   </ItemGroup>
 </Project>

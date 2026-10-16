@@ -31,9 +31,10 @@ public class IconFontCoverageTests
 
         using var typeface = SKTypeface.FromFile(fontPath);
         typeface.ShouldNotBeNull($"Could not load icon font at {fontPath}");
+        using var font = new SKFont(typeface);
 
         var missing = referenced
-            .Where(cp => typeface.GetGlyph(cp) == 0)
+            .Where(cp => font.GetGlyph(cp) == 0)
             .Select(cp => $"U+{cp:X5}")
             .ToArray();
 

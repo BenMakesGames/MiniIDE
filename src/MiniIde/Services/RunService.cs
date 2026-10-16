@@ -34,6 +34,8 @@ public class RunService
         if (entry.Kind == ProjectKind.Tst)
         {
             psi.ArgumentList.Add(entry.Path);
+            psi.ArgumentList.Add("--logger");
+            psi.ArgumentList.Add("console;verbosity=normal");
         }
         else
         {

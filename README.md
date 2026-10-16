@@ -18,27 +18,26 @@ so, like any ridiculous dev, I've decided to "just" make my own...
 
 ### my must-haves
 
-~~ultimately: to reach a point where I'm comfortable uninstalling Rider.~~ I did it :P
+a "dashboard" for managing my solution, and ~~ultimately: to reach a point where I'm comfortable uninstalling Rider.~~ *(I did it :P)*
 
 | feature                               | status                  |
 | ------------------------------------- | ----------------------- |
-| syntax highlighting (C#, JSON, XML)   | ✅                       |
 | a decent-ish & modern-ish look & feel | ✅                       |
-| per-project warnings & errors view    | ✔ - could use a UI pass |
+| per-project warnings & errors view    | ✅                       |
 | NuGet package management              | ✔ - could use a UI pass |
 
 ### my nice-to-haves
 
-| feature                                       | status                 |
-| --------------------------------------------- | ---------------------- |
-| nice test result UI (not just console output) | ❌                      |
-| rename symbol                                 | ❓ - needs more testing |
-| other refactors?                              | ❌                      |
+| feature                                               | status                                      |
+| ----------------------------------------------------- | ------------------------------------------- |
+| syntax highlighting for C#, JSON, XML                 | ✅                                           |
+| syntax highlighting for other .NET languages (F#, VB) | ❌                                           |
+| nice test result UI (not just console output)         | ❌                                           |
+| a way to perform common refactors?                    | ❌ - maybe better for Claude + a Roslyn MCP? |
 
 ### my GTFOs
 
 1. custom window chrome
 2. scanning the entire solution when the IDE starts up
-3. settings that require a built-in search tool
-4. hand-typed edits — the editor is a read-only window onto an authoritative disk; external tools (the agentic AI, CLI git) do the writing, and the view reconciles disk → view on focus and before every operation. Operation-driven writes (NuGet, refactors) stay. Fixing a one-char typo now goes through the agent or an external editor — deliberately.
+3. settings so complex they require a built-in search tool and/or giving up & googling
 

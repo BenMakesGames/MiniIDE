@@ -112,14 +112,10 @@ internal sealed class TabEditorBinder<TTab, TState>(
 /// instant a document change is about to be applied so <c>Changed</c> can decide whether to scroll — and is
 /// stored here, not derived at <c>Changed</c> time, because inserting a line grows the extent before
 /// AvaloniaEdit lays the view out again, which would wrongly answer "no" to "are we at the bottom?" in the
-/// gap. <see cref="LastOffsetY"/> and <see cref="LastViewportHeight"/> let the scroll-invalidated handler
-/// tell real user scrolls from extent growth: only an offset or viewport change counts as the user leaving
-/// (or returning to) the tail.</summary>
+/// gap.</summary>
 internal sealed class OutputEditorState
 {
     public bool WasAtBottom = true;
-    public double LastOffsetY;
-    public double LastViewportHeight;
 }
 
 /// <summary>The two per-kind wirings, and the factories that pair each with the shared binder.</summary>
@@ -254,11 +250,8 @@ internal static class TabEditorBinder
 
     private static Action AttachOutputTab(TextEditor editor, OutputEditorState state, OutputTabViewModel tab)
     {
-        const double epsilon = 1.0;
         var document = tab.Document;
         var scroll = (ILogicalScrollable)editor.TextArea.TextView;
-
-        bool IsAtBottom() => scroll.Offset.Y >= scroll.Extent.Height - scroll.Viewport.Height - epsilon;
 
         // AvaloniaEdit's own ScrollToLine centres the target line in the viewport (VisualYPosition.LineMiddle
         // plus a 30% minimum-scroll fraction), which for the tail of the document leaves roughly half the
@@ -272,12 +265,10 @@ internal static class TabEditorBinder
             scroll.Offset = new Vector(scroll.Offset.X, targetY);
         }, DispatcherPriority.Background);
 
-        state.LastOffsetY = scroll.Offset.Y;
-        state.LastViewportHeight = scroll.Viewport.Height;
         // Don't overwrite tab.StickToEnd from the current offset: a rebind resets the view's scroll but
         // the view model has already remembered the user's intent, and scrolling to the bottom no longer
-        // re-engages follow (only the overlay button does), so IsAtBottom() alone isn't a signal for it.
-        // Instead, if the tab is pinned, snap the newly-bound view to the tail.
+        // re-engages follow (only the overlay button does), so the current offset alone isn't a signal for
+        // it. Instead, if the tab is pinned, snap the newly-bound view to the tail.
         if (tab.StickToEnd) PinToTail();
 
         // Changing fires pre-mutation, Changed post — so "was the view at the bottom before this append?"
@@ -290,27 +281,35 @@ internal static class TabEditorBinder
             if (state.WasAtBottom && editor.Document.LineCount > 0) PinToTail();
         };
 
-        // Any offset movement away from the tail releases follow. ScrollInvalidated also fires when the
-        // extent grows from an append (offset unchanged, viewport unchanged), and when PinToTail itself
-        // scrolls to the bottom (offset moved, but IsAtBottom true): both are excluded here. Re-engaging
-        // follow by scrolling back to the bottom is deliberately gone — the user asked for "any scroll
-        // unpins", and the overlay button is the single way back in.
-        EventHandler onScrollInvalidated = (_, _) =>
-        {
-            var offsetY = scroll.Offset.Y;
-            var viewportH = scroll.Viewport.Height;
-            var offsetMoved = Math.Abs(offsetY - state.LastOffsetY) > epsilon;
-            state.LastOffsetY = offsetY;
-            state.LastViewportHeight = viewportH;
-            if (offsetMoved && !IsAtBottom()) tab.StickToEnd = false;
-        };
-
-        // Clicking into the editor places a caret and typically means the user is now reading, not
-        // following — auto-scroll from here on would yank the viewport out from under them. Keyboard
-        // navigation (page up / arrows) that moves the offset is already caught by ScrollInvalidated.
-        // Tunnel so we release before AvaloniaEdit's own pointer handling adjusts the caret.
+        // Follow mode releases only on explicit user interaction with the editor — never on a scroll
+        // invalidation, because AvaloniaEdit emits those for extent growth from an append, for the pin
+        // itself, and for transient offset clamps on rebind or external triggers (a git button click
+        // routing focus / layout through the view). Observing those as "the user scrolled away" wrongly
+        // unpins while the user has done nothing. The three gestures that actually mean "I'm reading, not
+        // following" are:
+        //   • Pressing into the editor — placing a caret, starting a selection, or dragging the scrollbar
+        //     thumb. Attached to the editor itself (not the TextArea) so a scrollbar press counts.
+        //   • Mousewheel / trackpad scrolling the viewport.
+        //   • Keyboard navigation (arrows, PageUp/Down, Home/End) that moves the caret or page.
+        // All three tunnel so we release before AvaloniaEdit's own handlers run.
         EventHandler<PointerPressedEventArgs> onPointerPressed = (_, _) => tab.StickToEnd = false;
-        editor.TextArea.AddHandler(InputElement.PointerPressedEvent, onPointerPressed, RoutingStrategies.Tunnel);
+        EventHandler<PointerWheelEventArgs> onPointerWheel = (_, _) => tab.StickToEnd = false;
+        EventHandler<KeyEventArgs> onKeyDown = (_, e) =>
+        {
+            // Filter to navigation keys so Ctrl+C on an unselected tail (or a modifier release) doesn't
+            // silently drop follow mode. These are the keys AvaloniaEdit would act on to move the caret
+            // or scroll the view.
+            switch (e.Key)
+            {
+                case Key.Up: case Key.Down: case Key.Left: case Key.Right:
+                case Key.PageUp: case Key.PageDown: case Key.Home: case Key.End:
+                    tab.StickToEnd = false;
+                    break;
+            }
+        };
+        editor.AddHandler(InputElement.PointerPressedEvent, onPointerPressed, RoutingStrategies.Tunnel);
+        editor.AddHandler(InputElement.PointerWheelChangedEvent, onPointerWheel, RoutingStrategies.Tunnel);
+        editor.TextArea.AddHandler(InputElement.KeyDownEvent, onKeyDown, RoutingStrategies.Tunnel);
 
         Action onScrollRequested = () =>
         {
@@ -319,16 +318,16 @@ internal static class TabEditorBinder
 
         document.Changing += onChanging;
         document.Changed += onChanged;
-        scroll.ScrollInvalidated += onScrollInvalidated;
         tab.ScrollToEndRequested += onScrollRequested;
 
         return () =>
         {
             document.Changing -= onChanging;
             document.Changed -= onChanged;
-            scroll.ScrollInvalidated -= onScrollInvalidated;
             tab.ScrollToEndRequested -= onScrollRequested;
-            editor.TextArea.RemoveHandler(InputElement.PointerPressedEvent, onPointerPressed);
+            editor.RemoveHandler(InputElement.PointerPressedEvent, onPointerPressed);
+            editor.RemoveHandler(InputElement.PointerWheelChangedEvent, onPointerWheel);
+            editor.TextArea.RemoveHandler(InputElement.KeyDownEvent, onKeyDown);
         };
     }
 }

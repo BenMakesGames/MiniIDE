@@ -97,11 +97,13 @@ public partial class OutputTabViewModel : DocumentTabViewModel
     public string StopTip => IsStopping ? "Already stopping — waiting for the process to exit" : "Stop this run";
 
     /// <summary>Whether the view is pinned to the tail of the output — a new line scrolls into view only while
-    /// this is true. The attached editor flips it to false on any user interaction that implies "I'm reading,
-    /// not following": scrolling the viewport away from the tail, or clicking into the editor to place a
-    /// caret. Scrolling back to the bottom does <em>not</em> re-engage follow; only the overlay "Follow tail"
-    /// button does, so the user never has the viewport yanked out from under them unexpectedly. The button is
-    /// bound to <c>!StickToEnd</c>, so it appears exactly when the view has fallen behind the tail.</summary>
+    /// this is true. The attached editor flips it to false on an explicit user interaction that implies "I'm
+    /// reading, not following": pressing into the editor (caret placement, selection, scrollbar drag),
+    /// wheel / trackpad scrolling, or keyboard navigation (arrows, PageUp/Down, Home/End). A scroll invalidation
+    /// alone is <em>not</em> such a signal — appends and layout transients fire those without any user action.
+    /// Scrolling back to the bottom does <em>not</em> re-engage follow; only the overlay "Follow tail" button
+    /// does, so the user never has the viewport yanked out from under them unexpectedly. The button is bound
+    /// to <c>!StickToEnd</c>, so it appears exactly when the view has fallen behind the tail.</summary>
     [ObservableProperty]
     private bool _stickToEnd = true;
 

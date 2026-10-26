@@ -13,9 +13,9 @@ public static class FileIconPalette
     public static readonly IBrush Image      = Brush("#7D44DD");
     public static readonly IBrush Video      = Brush("#569CD6");
     public static readonly IBrush ProjectExe = Brush("#569CD6");
-    public static readonly IBrush ProjectLib = Brush("#569CD6");
-    public static readonly IBrush ProjectWeb = Brush("#569CD6");
-    public static readonly IBrush ProjectTst = Brush("#569CD6");
+    public static readonly IBrush ProjectLib = Brush("#969696");
+    public static readonly IBrush ProjectWeb = Brush("#AC6ACB");
+    public static readonly IBrush ProjectTst = Brush("#DAAD66");
     public static readonly IBrush Unknown    = Brush("#808080");
 
     private static IBrush Brush(string hex) => new SolidColorBrush(Color.Parse(hex));

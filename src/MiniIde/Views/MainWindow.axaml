@@ -37,7 +37,7 @@
                 <TextBlock Text="{Binding SolutionName}" VerticalAlignment="Center" FontSize="18" Background="Transparent" DoubleTapped="OnSolutionNameDoubleTapped">
                     <TextBlock.ContextMenu>
                         <ContextMenu Opening="OnSolutionCtxOpening">
-                            <MenuItem Name="SolutionCtxOpenNew" Header="_Open solution..." Click="OnOpenSolutionClick"/>
+                            <MenuItem Name="SolutionCtxOpenNew" Header="_Open solution..." InputGesture="Ctrl+O" Click="OnOpenSolutionClick"/>
                             <MenuItem Header="_Reload solution" Click="OnReloadSolutionClick">
                                 <MenuItem.Icon>
                                     <TextBlock Text="{x:Static m:ActionIcon.Reload}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#3FB950" VerticalAlignment="Center"/>

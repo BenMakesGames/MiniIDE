@@ -1,13 +1,13 @@
 # Stack
 
-- **Runtime**: .NET 9
-- **GUI**: Avalonia + AvaloniaEdit
-- **Language service**: Roslyn (embed direct)
-- **Solution parse**: `Microsoft.VisualStudio.SolutionPersistence` (metadata) + `MSBuildWorkspace` (deferred)
+- **Runtime**: .NET 10
+- **GUI**: Avalonia + AvaloniaEdit (output tabs only)
+- **Solution parse**: `Microsoft.VisualStudio.SolutionPersistence` (metadata only; no MSBuild — see `msbuild.md`)
+- **Run / test**: shell `dotnet run` / `dotnet test`
 - **NuGet**: `NuGet.Protocol` + XML edit + shell `dotnet restore`
 
 ## GUI framework decision
 
-Avalonia over WPF: cross-plat free bonus, AvaloniaEdit purpose-built for code editors, RoslynPad already validates stack.
+Avalonia over WPF: cross-plat free bonus, AvaloniaEdit handles large streamed logs well.
 
 Skipped: WinUI 3 (weak text editing), Electron/Tauri (rebuilds IPC + editor for no reason).

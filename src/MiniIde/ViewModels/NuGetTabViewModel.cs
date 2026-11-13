@@ -39,7 +39,7 @@ public partial class NuGetTabViewModel : TabViewModelBase
         NuGetService svc,
         Func<OutputTabViewModel> resolveOutput,
         Func<string, string, OutputTabViewModel> resolveMetadataTab)
-        : base(TabIdFor(project.Path), filePath: null)
+        : base(TabIdFor(project.Path))
     {
         _svc = svc;
         _resolveOutput = resolveOutput;

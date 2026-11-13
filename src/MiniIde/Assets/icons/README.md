@@ -16,5 +16,5 @@ Do not change without re-verifying with Windows Font Viewer / a font inspector.
 
 1. Replace `MaterialDesignIconsDesktop.ttf` with the newer release from the source repo.
 2. Refresh `LICENSE` from the same tag.
-3. Update the version above and the version comment atop `Models/FileIcon.cs`.
-4. Re-verify every codepoint in `Models/FileIcon.cs` against the new release's `cheatsheet.html` — MDI has renumbered on major bumps historically.
+3. Update the version above and the version comment atop `Models/ProjectIcon.cs`.
+4. Re-verify every codepoint in `Models/ProjectIcon.cs` against the new release's `cheatsheet.html` — MDI has renumbered on major bumps historically.

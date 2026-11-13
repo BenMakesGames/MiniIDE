@@ -6,7 +6,7 @@ using System.IO;
 using System.Linq;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
-using MiniIde.Models;
+using MiniIde.Services;
 using MiniIde.ViewModels;
 using MiniIde.Views;
 
@@ -47,7 +47,7 @@ public partial class App : Application
         if (args is null) return null;
         foreach (var arg in args)
         {
-            if (Path.GetExtension(arg).ToFileKind() == FileKind.Solution && File.Exists(arg))
+            if (SolutionService.IsSolutionFile(arg) && File.Exists(arg))
                 return Path.GetFullPath(arg);
         }
         return null;

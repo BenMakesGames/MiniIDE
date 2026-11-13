@@ -13,8 +13,7 @@ reads → one debounced, payload-free `Changed` → `MainWindowViewModel` reload
 
 ## What's deliberately not watched
 
-- **Source files.** Editor tabs revalidate on activation and window focus (stamp-gated: a `stat` when
-  unchanged). The Roslyn snapshot reconciles on every semantic query — see `roslyn.md §Disk reconcile`.
+- **Source files.** MiniIDE shows none.
 - **`.git`.** Repo state is polled at focus; see `git.md`.
 
 ## Diagnostics

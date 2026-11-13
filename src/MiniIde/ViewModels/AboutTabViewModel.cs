@@ -12,7 +12,7 @@ public sealed class AboutTabViewModel : TabViewModelBase
     public static readonly Uri GamesUri = new("https://benmakesgames.com");
     public static readonly Uri PatreonUri = new("https://www.patreon.com/c/BenMakesGames");
 
-    public AboutTabViewModel() : base(Id, filePath: null) { }
+    public AboutTabViewModel() : base(Id) { }
 
     public override string Header => "About";
 

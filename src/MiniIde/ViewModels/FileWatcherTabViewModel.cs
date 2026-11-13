@@ -46,7 +46,7 @@ public partial class FileWatcherTabViewModel : TabViewModelBase
 
     public override string Header => "File-watcher diagnostics";
 
-    public FileWatcherTabViewModel(SolutionWatcher watcher) : base(Id, filePath: null)
+    public FileWatcherTabViewModel(SolutionWatcher watcher) : base(Id)
     {
         _watcher = watcher;
         // Default ctor, then Start on activation: the (interval, priority, handler) overload starts immediately.

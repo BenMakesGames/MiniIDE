@@ -14,7 +14,6 @@ public sealed class ProjectItemViewModelTests
         public List<RunSelection> Runs { get; } = new();
         public void StartRun(ProjectItemViewModel project, RunSelection selection) => Runs.Add(selection);
         public void ShowTab(TabViewModelBase tab) { }
-        public void FindProblems(ProjectItemViewModel project) { }
         public void ManageNuGet(ProjectItemViewModel project) { }
         public void SetStarred(ProjectItemViewModel project, bool starred) { }
     }

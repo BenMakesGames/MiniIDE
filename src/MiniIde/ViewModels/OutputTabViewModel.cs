@@ -9,9 +9,9 @@ using MiniIde.Services;
 
 namespace MiniIde.ViewModels;
 
-/// <summary>A tab that renders a streamed output buffer (a project run or a NuGet restore) in the main
-/// file area. It has no backing file — <see cref="TabViewModelBase.FilePath"/> is null, its identity is a
-/// <c>run:</c>/<c>nuget:</c> key, and its <see cref="Header"/> is fixed at construction.
+/// <summary>A tab that renders a streamed output buffer (a project run or a NuGet restore) in an AvaloniaEdit
+/// <c>TextEditor</c>. Its identity is a <c>run:</c>/<c>nuget:</c> key, and its <see cref="Header"/> is fixed
+/// at construction.
 /// <see cref="Append"/> is called from the background stdout/stderr readers, so both mutators marshal to
 /// the UI thread.
 ///
@@ -19,12 +19,16 @@ namespace MiniIde.ViewModels;
 /// process and no other, and re-running it starts a fresh process for the same project and selection into
 /// this same tab. Tabs constructed without a starter — NuGet restore output, per-package metadata — answer
 /// <see cref="HasRun"/> false, which is how the view hides the run strip on them.</para></summary>
-public partial class OutputTabViewModel : DocumentTabViewModel
+public partial class OutputTabViewModel : TabViewModelBase
 {
     private const int MaxLines = 5000;
 
     private readonly string _header;
     public override string Header => _header;
+
+    /// <summary>The buffer the view's editor shows. Created with the tab and never swapped, so the view's binder
+    /// can key its per-tab wiring on it.</summary>
+    public TextDocument Document { get; } = new();
 
     /// <summary>Starts one process for this tab's project and selection and hands the session back through
     /// <see cref="AttachRun"/>. Fixed at construction, so a tab is a run tab from birth and cannot become one
@@ -36,7 +40,7 @@ public partial class OutputTabViewModel : DocumentTabViewModel
     /// <param name="buttonLabel">What this run's button on its project card reads. Only meaningful with a
     /// <paramref name="start"/>; defaults to the header.</param>
     public OutputTabViewModel(string tabId, string header, Action<OutputTabViewModel>? start = null, string? buttonLabel = null)
-        : base(tabId, filePath: null, new TextDocument())
+        : base(tabId)
     {
         _header = header;
         _start = start;

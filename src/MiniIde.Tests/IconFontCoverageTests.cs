@@ -7,7 +7,7 @@ using Xunit;
 namespace MiniIde.Tests;
 
 // Guards the icon-font subset: every MDI glyph referenced in source must exist in the shipped,
-// subsetted font. If you add an icon (e.g. in ActionIcon/FileIcon) but forget to regenerate the
+// subsetted font. If you add an icon (e.g. in ActionIcon/ProjectIcon) but forget to regenerate the
 // font, this fails loudly instead of the glyph silently rendering as a blank tofu box.
 //
 //   Regenerate:  cd tools && npm run subset

@@ -19,6 +19,13 @@ public class SolutionService
     /// MSBuild process launch apiece for an answer the already-open solution model has for free.</summary>
     public IReadOnlyList<string> Configurations { get; private set; } = System.Array.Empty<string>();
 
+    /// <summary>Whether <paramref name="path"/> names a solution file (<c>.sln</c> or <c>.slnx</c>, any case) by
+    /// its extension. Says nothing about whether it exists.</summary>
+    public static bool IsSolutionFile(string path) =>
+        Path.GetExtension(path) is { } extension
+        && (extension.Equals(".sln", System.StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".slnx", System.StringComparison.OrdinalIgnoreCase));
+
     /// <summary>The solution-relative form of an absolute path, anchored on the solution directory.
     /// Returns <paramref name="absolutePath"/> unchanged when no solution is loaded. The solution file
     /// itself yields its bare filename.</summary>

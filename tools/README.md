@@ -7,7 +7,7 @@ font is a **subset of only the glyphs referenced in source** — a few KB that l
 
 ## Regenerate the shipped subset
 
-Run this whenever you add or change an icon codepoint in `src/MiniIde` (e.g. `ActionIcon`, `FileIcon`):
+Run this whenever you add or change an icon codepoint in `src/MiniIde` (e.g. `ActionIcon`, `ProjectIcon`):
 
 ```
 cd tools
@@ -48,5 +48,5 @@ for (let i = 0; i < font.glyphs.length; i++) {
 }
 ```
 
-Cross-check the result against a constant already in `ActionIcon`/`FileIcon` (e.g. `folder` → `U+F024B`);
+Cross-check the result against a constant already in `ActionIcon`/`ProjectIcon` (e.g. `folder` → `U+F024B`);
 if those agree, the lookup is reading the same table the app renders from.

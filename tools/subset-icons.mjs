@@ -4,7 +4,7 @@
 // that makes the full font take ~12-40s to load (see the icon-font investigation).
 //
 // Source of truth for "which glyphs":  every `"\U000FXXXX"` escape in src/MiniIde/**/*.cs
-// (ActionIcon, FileIcon, ...). Add an icon there, then run:  npm run subset  (in tools/)
+// (ActionIcon, ProjectIcon, ...). Add an icon there, then run:  npm run subset  (in tools/)
 //
 // The MiniIde.Tests guard test fails if a referenced glyph is missing from the shipped
 // font, so a forgotten re-run is caught loudly instead of rendering as a blank tofu box.

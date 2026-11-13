@@ -13,8 +13,7 @@ namespace MiniIde.Services;
 /// <see cref="Changed"/> per burst. It carries no paths: the response is always "reload the list", which is
 /// cheap and idempotent, so there is nothing for a consumer to triage.
 ///
-/// <para>Source files are deliberately not watched. Editor tabs revalidate on activation and window focus, and
-/// the Roslyn snapshot reconciles against disk before every semantic query; neither needs a feed.</para>
+/// <para>Source files are deliberately not watched: MiniIDE shows none, so nothing needs a feed.</para>
 ///
 /// <para>What it saw is readable through <see cref="Snapshot"/>, for the file-watcher diagnostics tab. That is
 /// observation only — nothing about <see cref="Changed"/> depends on it.</para>
@@ -112,8 +111,7 @@ public sealed class SolutionWatcher : IDisposable
     {
         var name = Path.GetFileName(path);
         var extension = Path.GetExtension(name);
-        return extension.Equals(".sln", StringComparison.OrdinalIgnoreCase)
-               || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+        return SolutionService.IsSolutionFile(name)
                || extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
                || name.Equals("launchSettings.json", StringComparison.OrdinalIgnoreCase)
                || (extension.Equals(".json", StringComparison.OrdinalIgnoreCase)

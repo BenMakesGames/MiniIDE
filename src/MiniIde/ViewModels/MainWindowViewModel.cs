@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -16,12 +15,10 @@ namespace MiniIde.ViewModels;
 public partial class MainWindowViewModel : ViewModelBase, IProjectHost
 {
     public SolutionService Solution { get; }
-    public WorkspaceService Workspace { get; }
     public SolutionWatcher Watcher { get; }
     public NuGetService NuGet { get; }
     public RunService Run { get; }
     public ShellService Shell { get; }
-    public SyntaxHighlightService Highlight { get; }
 
     private readonly RunRegistry _runs;
 
@@ -42,27 +39,18 @@ public partial class MainWindowViewModel : ViewModelBase, IProjectHost
 
     public string WindowTitle => Solution.SolutionPath is null ? "MiniIDE" : $"{SolutionName} - MiniIDE";
 
-    /// <summary>Raised to ask the view to reveal a location — open its file, place the caret, scroll, focus.
-    /// The view owns that because only it has the realized editor; every navigation source (problems,
-    /// go-to-definition) funnels through here rather than reaching into the editor itself.</summary>
-    public event Func<SourceLocation, Task>? RequestOpen;
-
     public MainWindowViewModel()
     {
         Solution = new SolutionService();
-        Workspace = new WorkspaceService();
         Watcher = new SolutionWatcher();
         Watcher.Changed += OnProjectFilesChanged;
         NuGet = new NuGetService();
         Run = new RunService();
         Shell = new ShellService();
-        Highlight = new SyntaxHighlightService();
-        Tabs = new TabStrip(msg => Status = msg);
+        Tabs = new TabStrip();
         _runs = new RunRegistry(Run, Tabs, msg => Status = msg, CardFor);
         Git = new GitBar(() => Tabs.ShowOutput("git:", "Git - Output"), msg => Status = msg);
     }
-
-    private Task OpenAsync(SourceLocation location) => RequestOpen?.Invoke(location) ?? Task.CompletedTask;
 
     [RelayCommand]
     public async Task OpenSolutionAsync(string path)
@@ -206,45 +194,15 @@ public partial class MainWindowViewModel : ViewModelBase, IProjectHost
 
     // ── Tabs ──────────────────────────────────────────────────────────────────────────────────────────
     //
-    // Every tab op lives in TabStrip. The forwards here are the ones callers (code-behind, project cards,
-    // the rename flow) need, each the one-liner it would otherwise have to spell out as `Tabs.X`.
-
-    public Task OpenFileAsync(string path) => Tabs.OpenFileAsync(path);
+    // Every tab op lives in TabStrip. The forward here is the one project cards need.
 
     public void ShowTab(TabViewModelBase tab) => Tabs.Show(tab);
 
-    /// <summary>Focus-time refresh (wired to the window's <c>Activated</c> event): whatever the user did
-    /// elsewhere — an agent editing the file on screen, a <c>git init</c> — shows when they come back. Cheap: a
-    /// stat for the active tab and a directory probe for git.</summary>
-    public async Task RefreshFromDiskAsync()
-    {
-        Git.Refresh(Solution.SolutionPath);
-        await Tabs.RevalidateActiveAsync();
-    }
-
-    /// <summary>Backs the explicit "Reload solution" command's snapshot half: forces a full workspace rebuild
-    /// and reloads every open editor tab. The project list is the command's own job.</summary>
-    public async Task ReloadWorkspaceAsync()
-    {
-        try
-        {
-            await Workspace.ReloadIfLoadedAsync();
-            await Tabs.ReloadEditorsAsync();
-        }
-        catch (Exception ex) { Status = ex.Message; }
-    }
+    /// <summary>Focus-time refresh (wired to the window's <c>Activated</c> event): a <c>git init</c> done
+    /// elsewhere shows when the user comes back. Cheap: a directory probe.</summary>
+    public void RefreshGit() => Git.Refresh(Solution.SolutionPath);
 
     // ── Project actions (IProjectHost) ────────────────────────────────────────────────────────────────
-
-    /// <summary>Runs on the project's Problems tab, creating it on first use. Re-asking refreshes the existing
-    /// tab rather than opening a second one — that is what "Find problems" means a second time.</summary>
-    public void FindProblems(ProjectItemViewModel project)
-    {
-        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
-        var tab = Tabs.GetOrCreate(ProblemsTabViewModel.TabIdFor(project.Path),
-            () => new ProblemsTabViewModel(project.Entry, Workspace, EnsureWorkspaceReadyAsync, OpenAsync));
-        if (tab.RefreshCommand.CanExecute(null)) tab.RefreshCommand.Execute(null);
-    }
 
     [RelayCommand]
     private void ShowAbout() => Tabs.GetOrCreate(AboutTabViewModel.Id, () => new AboutTabViewModel());
@@ -269,96 +227,4 @@ public partial class MainWindowViewModel : ViewModelBase, IProjectHost
         _runs.Start(project.Entry, selection);
 
     public void StopAllRuns() => _runs.StopAll();
-
-    // ── Semantic queries ──────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>Brings the Roslyn workspace up to date with the authoritative disk before a semantic query:
-    /// loads it if needed, then reconciles the snapshot against current file contents. Every semantic query
-    /// goes through this — skipping it means resolving against stale text, which after any length-changing
-    /// external edit silently returns positions for the wrong symbol.</summary>
-    private async Task EnsureWorkspaceReadyAsync(CancellationToken ct = default)
-    {
-        if (Solution.SolutionPath is null) return;
-        await Workspace.EnsureLoadedAsync(Solution.SolutionPath, ct);
-        await Workspace.ReconcileWithDiskAsync(ct);
-    }
-
-    /// <summary>Navigates to the definition of the symbol at <paramref name="caretOffset"/>, reporting the
-    /// outcome to the status bar. Owns the whole flow — the view supplies the caret and nothing else.</summary>
-    public async Task GoToDefinitionAsync(string file, int caretOffset)
-    {
-        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
-        Status = "Loading workspace (first use may take a while)...";
-        await EnsureWorkspaceReadyAsync();
-        Status = "Resolving...";
-        var definition = await Workspace.GoToDefinitionAsync(file, caretOffset);
-        if (definition is null) { Status = "No definition found"; return; }
-        Status = "Done";
-        await OpenAsync(definition);
-    }
-
-    /// <summary>Renames the symbol at <paramref name="caretOffset"/> solution-wide, writing every reference (and
-    /// the type-matched file) to disk. Owns the whole flow: reconcile → freshness-guard the clicked offset →
-    /// prompt (via <paramref name="promptForNewName"/>, which the view fulfils with the modal dialog) → compute
-    /// against fresh disk → apply → reflect the writes back into the view.
-    ///
-    /// <para><paramref name="viewText"/> is the editor's current text; the caret offset indexes it, but the
-    /// refactor resolves on fresh disk. If the two have drifted, we do not guess a symbol from a stale offset —
-    /// the tab is reloaded and the user is asked to re-invoke on the refreshed token.</para></summary>
-    public async Task RenameSymbolAsync(
-        string file, int caretOffset, string viewText, Func<string, Task<string?>> promptForNewName)
-    {
-        if (Solution.SolutionPath is null) { Status = "No solution open"; return; }
-        Status = "Loading workspace (first use may take a while)...";
-        await EnsureWorkspaceReadyAsync();
-
-        // Freshness gate (guards resolution, not just the write): the offset is into the view's text, but the
-        // snapshot now reflects disk. If they differ, resolving would land on the wrong token — refresh instead.
-        string diskText;
-        try { diskText = await File.ReadAllTextAsync(file); }
-        catch (Exception ex) { Status = $"Could not read {Path.GetFileName(file)}: {ex.Message}"; return; }
-        if (!string.Equals(viewText, diskText, StringComparison.Ordinal))
-        {
-            await Tabs.ReloadEditorsAsync();
-            Status = "File changed on disk — view refreshed. Re-invoke Rename on the symbol.";
-            return;
-        }
-
-        var target = await Workspace.DescribeRenameTargetAsync(file, caretOffset);
-        if (target is null) { Status = "No symbol to rename here"; return; }
-        if (!target.InSolution) { Status = "Only symbols defined in this solution can be renamed"; return; }
-
-        var newName = await promptForNewName(target.Name);
-        if (string.IsNullOrEmpty(newName) || string.Equals(newName, target.Name, StringComparison.Ordinal))
-        { Status = "Rename cancelled"; return; }
-
-        RenameOutcome outcome;
-        try { outcome = await Workspace.ComputeRenameAsync(file, caretOffset, newName); }
-        catch (Exception ex) { Status = $"Rename failed: {ex.Message}"; return; }
-
-        switch (outcome.Status)
-        {
-            case RenameStatus.NoSymbol: Status = "No symbol to rename here"; return;
-            case RenameStatus.NotInSolution: Status = "Only symbols defined in this solution can be renamed"; return;
-            case RenameStatus.Conflicts:
-                Status = $"Rename blocked — {string.Join("; ", outcome.Conflicts)}. Nothing written.";
-                return;
-        }
-
-        try { RenameService.ApplyToDisk(outcome); }
-        catch (Exception ex) { Status = $"Rename failed writing to disk: {ex.Message}"; return; }
-
-        // Reflect the writes back into the view. A moved file's tab is keyed to a path that no longer exists,
-        // so it is re-homed; everything else is a stamp-gated revalidate.
-        if (outcome.Move is { } move) await Tabs.RehomeMovedAsync(move.OldPath, move.NewPath);
-        await Workspace.ReconcileWithDiskAsync();
-        await Tabs.ReloadEditorsAsync();
-
-        var count = outcome.ChangedFiles.Count;
-        var files = count == 1 ? "file" : "files";
-        Status = outcome.Move is { } m
-            ? $"Renamed to {newName} across {count} {files}; {Path.GetFileName(m.OldPath)} → {Path.GetFileName(m.NewPath)}"
-            : $"Renamed to {newName} across {count} {files}";
-    }
-
 }

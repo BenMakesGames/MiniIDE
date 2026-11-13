@@ -16,7 +16,6 @@ public interface IProjectHost
 {
     void StartRun(ProjectItemViewModel project, RunSelection selection);
     void ShowTab(TabViewModelBase tab);
-    void FindProblems(ProjectItemViewModel project);
     void ManageNuGet(ProjectItemViewModel project);
     void SetStarred(ProjectItemViewModel project, bool starred);
 }
@@ -106,9 +105,6 @@ public partial class ProjectItemViewModel : ViewModelBase
     {
         if (tab is not null) _host.ShowTab(tab);
     }
-
-    [RelayCommand]
-    private void FindProblems() => _host.FindProblems(this);
 
     [RelayCommand]
     private void ManageNuGet() => _host.ManageNuGet(this);

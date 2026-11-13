@@ -105,11 +105,6 @@
                                     Background="#26262C" BorderBrush="#40808080" BorderThickness="1">
                                 <Border.ContextMenu>
                                     <ContextMenu>
-                                        <MenuItem Header="Find _problems" Command="{Binding FindProblemsCommand}">
-                                            <MenuItem.Icon>
-                                                <TextBlock Text="{x:Static m:ActionIcon.FindProblems}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
-                                            </MenuItem.Icon>
-                                        </MenuItem>
                                         <MenuItem Header="Manage _NuGet packages" Command="{Binding ManageNuGetCommand}">
                                             <MenuItem.Icon>
                                                 <TextBlock Text="{x:Static m:ActionIcon.NuGet}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
@@ -222,34 +217,10 @@
                 <TabControl.ItemTemplate>
                     <DataTemplate DataType="vm:TabViewModelBase">
                         <StackPanel Orientation="Horizontal" PointerPressed="OnTabHeaderPointerPressed">
-                            <StackPanel.ContextMenu>
-                                <!-- Path actions are inert on fileless tabs (output, problems, NuGet), so each item's
-                                     IsEnabled binds to the tab's FilePath. Keep this declarative: ContextMenu.Opening
-                                     is raised before the menu is parented, so a handler there sees a null DataContext
-                                     on a menu's first open and mis-computes enablement (see docs/avalonia.md). -->
-                                <ContextMenu>
-                                    <MenuItem Header="Open in e_xternal app" Click="OnCtxOpenExternallyClick"
-                                              IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}">
-                                        <MenuItem.Icon>
-                                            <TextBlock Text="{x:Static m:ActionIcon.OpenExternal}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#569CD6" VerticalAlignment="Center"/>
-                                        </MenuItem.Icon>
-                                    </MenuItem>
-                                    <MenuItem Header="Open in _Explorer" Click="OnCtxOpenInExplorerClick"
-                                              IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}">
-                                        <MenuItem.Icon>
-                                            <TextBlock Text="{x:Static m:ActionIcon.Explorer}" FontFamily="{StaticResource IconFont}" FontSize="16" Foreground="#E8C547" VerticalAlignment="Center"/>
-                                        </MenuItem.Icon>
-                                    </MenuItem>
-                                    <MenuItem Header="Copy _absolute path" Click="OnCtxCopyAbsolutePathClick"
-                                              IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                                    <MenuItem Header="Copy re_lative path" Click="OnCtxCopyRelativePathClick"
-                                              IsEnabled="{Binding FilePath, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                                </ContextMenu>
-                            </StackPanel.ContextMenu>
                             <Button Content="✕" Margin="0,0,6,0" Padding="4,0" FontSize="10" MinHeight="0" MinWidth="0" Click="OnCloseTabClick" Tag="{Binding}"/>
                             <!-- Three-state run indicator: solid green circle while live, green check once it has
                                  exited cleanly (or the user stopped it), red exclamation if it self-ended non-zero.
-                                 Only shown on tabs that track a process (HasRun), so file/editor tabs — whose
+                                 Only shown on tabs that track a process (HasRun), so other tabs — whose
                                  bindings fail harmlessly through FallbackValue — stay glyph-less. The glyph and
                                  color are picked by the VM so the three states can't disagree. -->
                             <TextBlock Margin="0,0,6,0" VerticalAlignment="Center"
@@ -263,28 +234,6 @@
                     </DataTemplate>
                 </TabControl.ItemTemplate>
                 <TabControl.DataTemplates>
-                    <DataTemplate DataType="vm:EditorTabViewModel">
-                        <ae:TextEditor IsReadOnly="True"
-                                       ShowLineNumbers="True"
-                                       FontFamily="Consolas,monospace"
-                                       FontSize="13"
-                                       Background="#000000"
-                                       Foreground="#DCDCDC"
-                                       Name="Editor"
-                                       AttachedToVisualTree="OnEditorAttached"
-                                       DataContextChanged="OnEditorDataContextChanged"
-                                       DetachedFromVisualTree="OnEditorDetached">
-                            <ae:TextEditor.ContextMenu>
-                                <ContextMenu Opening="OnCodeCtxOpening">
-                                    <MenuItem Name="CtxGoToDefItem" Header="Go to definition" InputGesture="F12" Click="OnCtxGoToDefClick"/>
-                                    <Separator/>
-                                    <MenuItem Name="CtxRenameItem" Header="Rename…" Click="OnCtxRenameClick"/>
-                                </ContextMenu>
-                            </ae:TextEditor.ContextMenu>
-                        </ae:TextEditor>
-                    </DataTemplate>
-                    <!-- Same three handlers as the code template: each binder ignores editors showing the
-                         other kind of tab, so the window needs one handler trio, not one per kind. -->
                     <DataTemplate DataType="vm:OutputTabViewModel">
                         <Grid RowDefinitions="Auto,*">
                             <!-- Stop/Run live here: each run owns its own process, so the only place that can name
@@ -361,79 +310,6 @@
                                     </Button.Styles>
                                 </Button>
                             </Panel>
-                        </Grid>
-                    </DataTemplate>
-                    <DataTemplate DataType="vm:ImageTabViewModel">
-                        <Grid Background="#1E1E22">
-                            <Viewbox Stretch="Uniform"
-                                     StretchDirection="DownOnly"
-                                     HorizontalAlignment="Center"
-                                     VerticalAlignment="Center"
-                                     IsVisible="{Binding Image, Converter={x:Static ObjectConverters.IsNotNull}}">
-                                <Image Source="{Binding Image}"/>
-                            </Viewbox>
-                            <TextBlock Text="{Binding Error}"
-                                       Foreground="#DCDCDC"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                        </Grid>
-                    </DataTemplate>
-                    <DataTemplate DataType="vm:ProblemsTabViewModel">
-                        <Grid RowDefinitions="Auto,*,Auto">
-                            <Grid Grid.Row="0" Margin="4" ColumnDefinitions="Auto,*,Auto">
-                                <Button Grid.Column="0" Content="Refresh" Command="{Binding RefreshCommand}"/>
-                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <RadioButton GroupName="ProblemGrouping" Content="By file" IsChecked="{Binding IsByFile, Mode=TwoWay}"/>
-                                    <RadioButton GroupName="ProblemGrouping" Content="By code" IsChecked="{Binding IsByCode, Mode=TwoWay}" Margin="10,0,0,0"/>
-                                </StackPanel>
-                            </Grid>
-                            <Grid Grid.Row="1">
-                                <TreeView Background="#000000" ItemsSource="{Binding Groups}"
-                                          AttachedToVisualTree="OnProblemsTreeAttached"
-                                          KeyDown="OnProblemsTreeKeyDown">
-                                    <!-- Stretch the item so its header fills the full row height; the Fluent default
-                                         (Center) leaves dead strips above and below that swallow double-clicks.
-                                         Stretching the content horizontally lets a leaf's right-click menu open
-                                         anywhere on its row, not just over the text. -->
-                                    <TreeView.ItemContainerTheme>
-                                        <ControlTheme TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
-                                            <Setter Property="VerticalAlignment" Value="Stretch"/>
-                                            <Style Selector="^ /template/ ContentPresenter#PART_HeaderPresenter">
-                                                <Setter Property="HorizontalAlignment" Value="Stretch"/>
-                                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                                            </Style>
-                                        </ControlTheme>
-                                    </TreeView.ItemContainerTheme>
-                                    <TreeView.DataTemplates>
-                                        <TreeDataTemplate DataType="vm:ProblemGroup" ItemsSource="{Binding Children}">
-                                            <TextBlock Text="{Binding Header}" VerticalAlignment="Center"/>
-                                        </TreeDataTemplate>
-                                        <DataTemplate DataType="vm:ProblemLeaf">
-                                            <StackPanel Orientation="Horizontal" Background="Transparent">
-                                                <!-- On the leaf, not the tree, so group rows get no menu. Right-press
-                                                     selects the row first, so Ctrl+C afterwards copies the same item. -->
-                                                <StackPanel.ContextMenu>
-                                                    <ContextMenu>
-                                                        <MenuItem Header="_Copy" InputGesture="Ctrl+C" Click="OnCtxCopyProblemClick"/>
-                                                    </ContextMenu>
-                                                </StackPanel.ContextMenu>
-                                                <TextBlock Text="{Binding Glyph}"
-                                                           Foreground="{Binding IconColor}"
-                                                           Margin="0,0,6,0"
-                                                           VerticalAlignment="Center"/>
-                                                <TextBlock Text="{Binding Display}" VerticalAlignment="Center"/>
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </TreeView.DataTemplates>
-                                </TreeView>
-                                <TextBlock Text="{Binding Placeholder}"
-                                           Foreground="#808080"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                                           IsHitTestVisible="False"
-                                           IsVisible="{Binding ShowPlaceholder}"/>
-                            </Grid>
-                            <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4"/>
                         </Grid>
                     </DataTemplate>
                     <DataTemplate DataType="vm:NuGetTabViewModel">

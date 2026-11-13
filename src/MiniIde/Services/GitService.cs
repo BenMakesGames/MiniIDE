@@ -10,7 +10,7 @@ namespace MiniIde.Services;
 /// <summary>The whole of the IDE's git knowledge: where the repository is, and how to run one git command
 /// into an output tab. Deliberately tiny — this is pull, push and init, not a VCS integration.
 ///
-/// <para><c>.git</c> is in <see cref="Models.IdeDirectories.Pruned"/> and stays there, so no repository
+/// <para>Nothing in <c>.git</c> is a file <see cref="SolutionWatcher.IsRelevant"/> cares about, so no repository
 /// creation or deletion can ever arrive as a <see cref="SolutionWatcher"/> signal. Repository state is
 /// therefore <em>polled</em> by the caller at solution-open, window-activation and post-init; see
 /// <c>docs/git.md</c>.</para></summary>

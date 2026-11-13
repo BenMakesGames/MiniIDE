@@ -5,8 +5,8 @@ namespace MiniIde.Models;
 // C# \uXXXX only reaches U+FFFF; \U000FXXXX is required to encode these.
 // If MDI is bumped, re-verify every codepoint against the new release's cheatsheet.html.
 //
-// Menu-action glyphs (Reload / Claude / Explorer / external open / project actions). Kept separate from FileIcon,
-// which is scoped to file-type and project-kind glyphs — action glyphs don't belong there.
+// Menu-action glyphs (Reload / Claude / Explorer / project actions). Kept separate from ProjectIcon,
+// which is scoped to project-kind glyphs — action glyphs don't belong there.
 //
 // ── Added or changed a glyph below? Re-run the subset script: ─────────────────
 //        cd tools && npm run subset
@@ -19,11 +19,9 @@ public static class ActionIcon
     public const string Claude       = "\U000F06A9"; // robot
     public const string Explorer     = "\U000F024B"; // folder
     public const string Terminal     = "\U000F018D"; // console-line
-    public const string OpenExternal = "\U000F03CC"; // open-in-new
     public const string Run          = "\U000F040A"; // play
     public const string GitPull      = "\U000F0045"; // arrow-down
     public const string GitPush      = "\U000F005D"; // arrow-up
-    public const string FindProblems = "\U000F05D6"; // alert-circle-outline
     public const string NuGet        = "\U000F03D6"; // package-variant
     public const string Star         = "\U000F04CE"; // star
     public const string StarOutline  = "\U000F04D2"; // star-outline

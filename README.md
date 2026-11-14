@@ -10,7 +10,7 @@ I love Rider - it's been my favorite C# IDE for years - but like all IDEs, it's 
 
 but of all the features Rider offers, I've only used very few; with agentic AIs, I use fewer still. *I barely type code at all anymore!*
 
-(I've tried vscode various times over the years: its UI/UX is simply not to my liking, and their C# support has always lagged, _and_ it's an electron app?! that's extra weight++!)
+(I've tried vscode various times over the years: its UI/UX is simply not to my liking, and it's an electron app! that's extra weight++!)
 
 so, like any ridiculous dev, I've decided to "just" make my own...
 
@@ -28,13 +28,11 @@ a "dashboard" for managing my solution, and ~~ultimately: to reach a point where
 
 ### my nice-to-haves
 
-| feature                                               | status                                                |
-| ----------------------------------------------------- | ----------------------------------------------------- |
-| syntax highlighting for C#, JSON, XML                 | ✅                                                     |
-| syntax highlighting for other .NET languages (F#, VB) | ❌                                                     |
-| nice test result UI (not just console output)         | ❌                                                     |
-| performance profiling? (identify CPU & RAM hotspots)  | ❌ - possible bloat - research off-the-shelf solutions |
-| a way to perform common refactors?                    | ❌ - maybe better for Claude + a Roslyn MCP?           |
+| feature                                              | status                                                |
+| ---------------------------------------------------- | ----------------------------------------------------- |
+| nice test result UI (not just console output)        | ❌                                                     |
+| performance profiling? (identify CPU & RAM hotspots) | ❌ - possible bloat - research off-the-shelf solutions |
+| a way to perform common refactors?                   | ❌ - maybe better for Claude + a Roslyn MCP?           |
 
 ### my GTFOs
 

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using MiniIde.Models;
@@ -26,6 +27,9 @@ public class RunService
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // Child tools write UTF-8; the default decoder is the ANSI code page, which turns "•" into "â€¢".
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add(verb);
@@ -41,6 +45,10 @@ public class RunService
         {
             psi.ArgumentList.Add("--project");
             psi.ArgumentList.Add(entry.Path);
+            // With stdout redirected there is no terminal logger, and `dotnet run`'s default build verbosity
+            // prints nothing at all — a slow build (restore, generators, a locked file) reads as a hung run.
+            // Minimal restores the restore/"X -> path" progress lines a real console would show.
+            psi.ArgumentList.Add("-v:m");
             // The launch profile rides in this same branch for the same reason: `dotnet test` has no
             // --launch-profile at all, so a profile is a run-only argument.
             if (selection.LaunchProfile is { } profile)

@@ -130,6 +130,9 @@ public class NuGetService
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // Child tools write UTF-8; the default decoder is the ANSI code page, which turns "•" into "â€¢".
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add("restore");

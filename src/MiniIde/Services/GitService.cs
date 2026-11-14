@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -57,6 +58,9 @@ public static class GitService
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // Child tools write UTF-8; the default decoder is the ANSI code page, which turns "•" into "â€¢".
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
             CreateNoWindow = true,
         };
         // Arguments go through ArgumentList, never a joined string — a repository path with a space in it
